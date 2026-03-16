@@ -10,26 +10,19 @@
 #define LED 2
 
 const int WS_PORT = 8765;
-const char* HUB_IP = "192.168.31.233";
+const char* HUB_HOSTNAME = "herald";
+const int RECONNECT_INTERVAL_MS = 5000;
 
 bool isHub = false;
-int myBoxId = -1;
+String myHwId = "";
 
 WebSocketsServer wsServer(WS_PORT);
 WebSocketsClient wsClient;
 
-// ---- JSON helpers ----
+// ---- Hardware ID ----
 
-void sendToHub(JsonDocument& doc) {
-  String out;
-  serializeJson(doc, out);
-  wsClient.sendTXT(out);
-}
-
-void sendToClient(uint8_t clientNum, JsonDocument& doc) {
-  String out;
-  serializeJson(doc, out);
-  wsServer.sendTXT(clientNum, out);
+String getHwId() {
+  return WiFi.macAddress();
 }
 
 // ---- LED (placeholder) ----
@@ -39,32 +32,37 @@ void setLed(bool on) {
 }
 
 void handleLedCommand(JsonDocument& doc) {
-  const char* pattern = doc["pattern"];
+  const char* pattern = doc["pattern"] | "";
   if (strcmp(pattern, "on") == 0) setLed(true);
   else if (strcmp(pattern, "off") == 0) setLed(false);
+  // leds array handling will go here when we have NeoPixel hardware
 }
-
 // ---- Hub: client tracking ----
 
-const int MAX_CLIENTS = 10; // 9 boxes + 1 app
-int clientBoxIds[MAX_CLIENTS];
+const int MAX_CLIENTS = 10;
+String clientHwIds[MAX_CLIENTS];
 bool clientIsApp[MAX_CLIENTS];
-int nextBoxId = 1; // hub itself is box 0, clients start from 1
 int appClientNum = -1;
 
 void initClientTracking() {
   for (int i = 0; i < MAX_CLIENTS; i++) {
-    clientBoxIds[i] = -1;
+    clientHwIds[i] = "";
     clientIsApp[i] = false;
   }
 }
 
 void forwardToApp(JsonDocument& doc) {
   if (appClientNum >= 0) {
-    sendToClient(appClientNum, doc);
-  } else {
-    Serial.println("No app connected, dropping message");
+    String out;
+    serializeJson(doc, out);
+    wsServer.sendTXT(appClientNum, out);
   }
+}
+
+void sendToClient(uint8_t clientNum, JsonDocument& doc) {
+  String out;
+  serializeJson(doc, out);
+  wsServer.sendTXT(clientNum, out);
 }
 
 // ---- Hub event handler ----
@@ -73,7 +71,6 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
   switch (type) {
 
     case WStype_CONNECTED:
-      // Wait for hello message before assigning role
       Serial.printf("WS client %d connected, awaiting hello\n", clientNum);
       break;
 
@@ -82,17 +79,14 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
         Serial.println("App disconnected");
         appClientNum = -1;
         clientIsApp[clientNum] = false;
-      } else {
-        int boxId = clientBoxIds[clientNum];
-        if (boxId >= 0) {
-          Serial.printf("Box %d disconnected\n", boxId);
-          // Notify app
-          JsonDocument notify;
-          notify["type"] = "disconnected";
-          notify["box"] = boxId;
-          forwardToApp(notify);
-          clientBoxIds[clientNum] = -1;
-        }
+      } else if (clientHwIds[clientNum] != "") {
+        String hwId = clientHwIds[clientNum];
+        Serial.printf("Box %s disconnected\n", hwId.c_str());
+        JsonDocument notify;
+        notify["type"] = "disconnected";
+        notify["hwid"] = hwId;
+        forwardToApp(notify);
+        clientHwIds[clientNum] = "";
       }
       break;
     }
@@ -102,7 +96,6 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
       deserializeJson(doc, payload, length);
       const char* msgType = doc["type"];
 
-      // Handle hello handshake
       if (strcmp(msgType, "hello") == 0) {
         const char* clientType = doc["client"];
 
@@ -111,54 +104,54 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
           appClientNum = clientNum;
           Serial.println("App connected");
 
+          // Acknowledge
           JsonDocument ack;
           ack["type"] = "hello_ack";
           ack["client"] = "hub";
           sendToClient(clientNum, ack);
 
-          // Report hub's own box
+          // Report hub itself
           JsonDocument hubBox;
           hubBox["type"] = "connected";
-          hubBox["box"] = 0;
+          hubBox["hwid"] = myHwId;
           sendToClient(clientNum, hubBox);
 
-          // Report any already-connected client boxes
+          // Report already connected boxes
           for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (clientBoxIds[i] >= 0 && !clientIsApp[i]) {
+            if (clientHwIds[i] != "" && !clientIsApp[i]) {
               JsonDocument notify;
               notify["type"] = "connected";
-              notify["box"] = clientBoxIds[i];
+              notify["hwid"] = clientHwIds[i];
               sendToClient(clientNum, notify);
             }
           }
-        } else if (strcmp(clientType, "box") == 0) {
-          // This is a box — assign it an ID
-          int boxId = nextBoxId++;
-          clientBoxIds[clientNum] = boxId;
 
-          // Send assignment back to box
+        } else if (strcmp(clientType, "box") == 0) {
+          const char* hwId = doc["hwid"];
+          clientHwIds[clientNum] = hwId;
+
+          // Send assignment ack back to box
           JsonDocument assign;
           assign["type"] = "assigned";
-          assign["box"] = boxId;
+          assign["hwid"] = hwId;
           sendToClient(clientNum, assign);
 
           // Notify app
           JsonDocument notify;
           notify["type"] = "connected";
-          notify["box"] = boxId;
+          notify["hwid"] = hwId;
           forwardToApp(notify);
 
-          Serial.printf("Box %d connected (ws client %d)\n", boxId, clientNum);
+          Serial.printf("Box %s connected (ws client %d)\n", hwId, clientNum);
         }
         break;
       }
 
       // Route messages from boxes to app
       if (!clientIsApp[clientNum]) {
-        int boxId = clientBoxIds[clientNum];
-        if (boxId >= 0) {
-          // Stamp the box ID and forward to app
-          doc["box"] = boxId;
+        String hwId = clientHwIds[clientNum];
+        if (hwId != "") {
+          doc["hwid"] = hwId;
           forwardToApp(doc);
         }
         break;
@@ -166,20 +159,21 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
 
       // Route messages from app to a specific box
       if (clientIsApp[clientNum]) {
-        int targetBox = doc["box"] | -1;
-        if (targetBox < 0) break;
+        const char* targetHwId = doc["hwid"] | "";
+        if (strlen(targetHwId) == 0) break;
 
-          // If the command is for the hub itself, handle locally
-        if (targetBox == 0) {
-          if (strcmp(msgType, "led") == 0) {
+        // Handle hub's own LED commands locally
+        if (strcmp(targetHwId, myHwId.c_str()) == 0) {
+          const char* msgTypeInner = doc["type"] | "";
+          if (strcmp(msgTypeInner, "led") == 0) {
             handleLedCommand(doc);
           }
           break;
         }
 
-        // Find the ws clientNum for this box ID
+        // Forward to correct box
         for (int i = 0; i < MAX_CLIENTS; i++) {
-          if (clientBoxIds[i] == targetBox) {
+          if (clientHwIds[i] == targetHwId) {
             sendToClient(i, doc);
             break;
           }
@@ -203,13 +197,15 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
       JsonDocument hello;
       hello["type"] = "hello";
       hello["client"] = "box";
-      sendToHub(hello);
+      hello["hwid"] = myHwId;
+      String out;
+      serializeJson(hello, out);
+      wsClient.sendTXT(out);
       break;
     }
 
     case WStype_DISCONNECTED:
-      Serial.println("Disconnected from hub");
-      myBoxId = -1;
+      Serial.println("Disconnected from hub, will retry...");
       break;
 
     case WStype_TEXT: {
@@ -218,8 +214,7 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
       const char* msgType = doc["type"];
 
       if (strcmp(msgType, "assigned") == 0) {
-        myBoxId = doc["box"];
-        Serial.printf("Assigned box ID: %d\n", myBoxId);
+        Serial.printf("Confirmed hwid: %s\n", myHwId.c_str());
       } else if (strcmp(msgType, "led") == 0) {
         handleLedCommand(doc);
       }
@@ -231,20 +226,27 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
+// ---- Send helpers ----
+
+void sendToHub(JsonDocument& doc) {
+  String out;
+  serializeJson(doc, out);
+  wsClient.sendTXT(out);
+}
+
 // ---- Hub setup ----
 
 void becomeHub() {
   isHub = true;
-  myBoxId = 0;
   initClientTracking();
   Serial.println("Becoming hub");
   wsServer.begin();
   wsServer.onEvent(onServerEvent);
   Serial.printf("WebSocket server started on port %d\n", WS_PORT);
 
-  if (MDNS.begin("herald")) {
+  if (MDNS.begin(HUB_HOSTNAME)) {
     MDNS.addService("ws", "tcp", WS_PORT);
-    Serial.println("mDNS started — hub reachable at herald.local");
+    Serial.printf("mDNS started — hub reachable at %s.local\n", HUB_HOSTNAME);
   } else {
     Serial.println("mDNS failed — connect via IP");
   }
@@ -257,9 +259,10 @@ void becomeHub() {
 
 void becomeClient() {
   isHub = false;
-  Serial.printf("Connecting to hub at %s:%d\n", HUB_IP, WS_PORT);
-  wsClient.begin(HUB_IP, WS_PORT, "/");
+  Serial.printf("Connecting to hub at %s.local:%d\n", HUB_HOSTNAME, WS_PORT);
+  wsClient.begin(String(HUB_HOSTNAME) + ".local", WS_PORT, "/");
   wsClient.onEvent(onClientEvent);
+  wsClient.setReconnectInterval(RECONNECT_INTERVAL_MS);
 }
 
 // ---- Election ----
@@ -272,8 +275,9 @@ void electHub() {
 #else
   WiFiClient testClient;
   Serial.println("Trying to find hub...");
-  if (testClient.connect(HUB_IP, WS_PORT)) {
+  if (testClient.connect(String(HUB_HOSTNAME) + ".local", WS_PORT)) {
     testClient.stop();
+    Serial.println("Hub found!");
     becomeClient();
   } else {
     Serial.println("No hub found");
@@ -285,24 +289,56 @@ void electHub() {
 // ---- Button handling ----
 
 bool lastEndTurnState = HIGH;
+unsigned long endTurnPressTime = 0;
+bool longPressHandled = false;
+const unsigned long LONG_PRESS_MS = 2000;
 
 void handleButtons() {
   bool endTurnState = digitalRead(BUTTON_ENDTURN);
 
   if (endTurnState == LOW && lastEndTurnState == HIGH) {
-    setLed(true);
-    delay(100);
-    setLed(false);
+    // Button just pressed
+    endTurnPressTime = millis();
+    longPressHandled = false;
+  }
 
-    JsonDocument doc;
-    doc["type"] = "endturn";
-    doc["box"] = myBoxId;
+  if (endTurnState == LOW && !longPressHandled) {
+    if (millis() - endTurnPressTime >= LONG_PRESS_MS) {
+      // Long press detected
+      longPressHandled = true;
+      setLed(true);
+      delay(100);
+      setLed(false);
 
-    if (isHub) {
-      // Hub's own button — forward directly to app
-      forwardToApp(doc);
-    } else {
-      sendToHub(doc);
+      JsonDocument doc;
+      doc["type"] = "longpress";
+      doc["hwid"] = myHwId;
+
+      if (isHub) {
+        forwardToApp(doc);
+      } else {
+        sendToHub(doc);
+      }
+    }
+  }
+
+  if (endTurnState == HIGH && lastEndTurnState == LOW) {
+    // Button released
+    if (!longPressHandled) {
+      // Short press
+      setLed(true);
+      delay(100);
+      setLed(false);
+
+      JsonDocument doc;
+      doc["type"] = "endturn";
+      doc["hwid"] = myHwId;
+
+      if (isHub) {
+        forwardToApp(doc);
+      } else {
+        sendToHub(doc);
+      }
     }
   }
 
@@ -326,8 +362,8 @@ void setup() {
 
   Serial.println();
   Serial.println("WiFi connected!");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  myHwId = getHwId();
+  Serial.printf("Hardware ID: %s\n", myHwId.c_str());
 
   delay(500);
   electHub();
