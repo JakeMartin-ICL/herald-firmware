@@ -42,7 +42,7 @@ if ($confirm -notmatch '^[yY]') {
 # Replace version number on the DFIRMWARE_VERSION line
 # Using '$1' (single-quoted) so $1 is a literal regex backreference, not a PS variable
 $content = Get-Content platformio.ini -Raw
-$content = $content -replace '(DFIRMWARE_VERSION=[^0-9]*)[\d.]+', ('$1' + $new)
+$content = $content -replace '(DFIRMWARE_VERSION=[^0-9]*)[\d.]+', ('${1}' + $new)
 Set-Content platformio.ini -Value $content -NoNewline
 
 git add platformio.ini
