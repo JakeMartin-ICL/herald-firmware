@@ -9,6 +9,8 @@
 #include <HTTPUpdate.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <SPI.h>
+#include <MFRC522.h>
 #include "freertos/queue.h"
 
 #ifdef LOCAL_BUILD
@@ -17,6 +19,14 @@
 
 #define BUTTON_ENDTURN 18
 #define LED 2
+
+// RFID (MFRC522 via VSPI with custom SCK to avoid conflict with pin 18)
+// Adjust these to match your wiring.
+#define RFID_SS_PIN   21
+#define RFID_RST_PIN  22
+#define RFID_SCK_PIN  14
+#define RFID_MISO_PIN 19
+#define RFID_MOSI_PIN 23
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "dev"
@@ -92,6 +102,7 @@ bool isHub = false;
 String myHwId = "";
 bool debugModeEnabled = false;
 bool otaInProgress = false;
+bool rfidEnabled = false;
 volatile bool otaComplete = false;
 char otaCompleteVersion[64] = "";
 QueueHandle_t otaProgressQueue = NULL;
@@ -183,6 +194,135 @@ void sendToHub(JsonDocument& doc) {
   String out;
   serializeJson(doc, out);
   wsClient.sendTXT(out);
+}
+
+// ---- RFID ----
+
+MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
+MFRC522::MIFARE_Key rfidKey;
+
+// Authenticate sector 0 with the default factory key (all 0xFF).
+static bool rfidAuth() {
+  for (byte i = 0; i < 6; i++) rfidKey.keyByte[i] = 0xFF;
+  MFRC522::StatusCode s = rfid.PCD_Authenticate(
+    MFRC522::PICC_CMD_MF_AUTH_KEY_A, 3, &rfidKey, &rfid.uid);
+  if (s != MFRC522::STATUS_OK) {
+    Serial.print("RFID auth failed: ");
+    Serial.println(rfid.GetStatusCodeName(s));
+  }
+  return s == MFRC522::STATUS_OK;
+}
+
+// Read up to 32 bytes from blocks 1–2 of sector 0 into `out`.
+// Returns false if auth or any read fails.
+static bool rfidReadContent(String& out) {
+  if (!rfidAuth()) return false;
+
+  char raw[33] = {};
+  byte buf[18];
+  byte bufSize;
+
+  bufSize = sizeof(buf);
+  if (rfid.MIFARE_Read(1, buf, &bufSize) == MFRC522::STATUS_OK)
+    memcpy(raw, buf, 16);
+
+  bufSize = sizeof(buf);
+  if (rfid.MIFARE_Read(2, buf, &bufSize) == MFRC522::STATUS_OK)
+    memcpy(raw + 16, buf, 16);
+
+  raw[32] = '\0';
+  out = String(raw);
+  int nullPos = out.indexOf('\0');
+  if (nullPos >= 0) out = out.substring(0, nullPos);
+  return true;
+}
+
+// Write a null-terminated string into blocks 1–2 of sector 0 (max 31 chars).
+static bool rfidWriteContent(const char* content) {
+  if (!rfidAuth()) return false;
+
+  byte block1[16] = {};
+  byte block2[16] = {};
+  size_t len = min(strlen(content), (size_t)31);
+  if (len <= 16) {
+    memcpy(block1, content, len);
+  } else {
+    memcpy(block1, content, 16);
+    memcpy(block2, content + 16, len - 16);
+  }
+
+  if (rfid.MIFARE_Write(1, block1, 16) != MFRC522::STATUS_OK) {
+    Serial.println("RFID: write block 1 failed");
+    rfid.PCD_StopCrypto1();
+    return false;
+  }
+  if (rfid.MIFARE_Write(2, block2, 16) != MFRC522::STATUS_OK) {
+    Serial.println("RFID: write block 2 failed");
+    rfid.PCD_StopCrypto1();
+    return false;
+  }
+  rfid.PCD_StopCrypto1();
+  return true;
+}
+
+// Called from loop() — detect new tags, read their content, forward as rfid message.
+void loopRfid() {
+  if (!rfidEnabled) return;
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
+
+  String content;
+  bool ok = rfidReadContent(content);
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  if (!ok) return;
+
+  if (content.length() == 0) {
+    Serial.println("RFID: blank tag, ignoring");
+    return;
+  }
+  if (content.indexOf(':') < 0) {
+    Serial.printf("RFID: unrecognised format: %s\n", content.c_str());
+    return;
+  }
+
+  debugLog("RFID tag read: " + content);
+  JsonDocument doc;
+  doc["type"] = "rfid";
+  doc["hwid"] = myHwId;
+  doc["tagId"] = content;
+  if (isHub) forwardToApp(doc);
+  else sendToHub(doc);
+}
+
+// Called when the hub receives an rfid_write command from the app.
+// Wakes any card in the field (including halted ones) and writes the internalId string.
+void handleRfidWrite(const char* internalId) {
+  byte atqa[2];
+  byte atqaSize = sizeof(atqa);
+
+  // WUPA wakes cards in halt state; fall back to REQA for freshly presented cards
+  bool cardPresent = (rfid.PICC_WakeupA(atqa, &atqaSize) == MFRC522::STATUS_OK)
+                  || rfid.PICC_IsNewCardPresent();
+
+  JsonDocument resp;
+  resp["type"] = "rfid_write_result";
+  resp["hwid"] = myHwId;
+
+  if (!cardPresent || !rfid.PICC_ReadCardSerial()) {
+    resp["success"] = false;
+    resp["error"] = "No card in field";
+    forwardToApp(resp);
+    return;
+  }
+
+  bool ok = rfidWriteContent(internalId);
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  resp["success"] = ok;
+  if (!ok) resp["error"] = "Write failed";
+  forwardToApp(resp);
 }
 
 // ---- OTA ----
@@ -282,6 +422,7 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
         if (strcmp(clientType, "app") == 0) {
           clientIsApp[clientNum] = true;
           appClientNum = clientNum;
+          rfidEnabled = false; // app controls RFID state; reset to known baseline on connect
           debugLog("App connected");
 
           // Acknowledge with version
@@ -385,6 +526,12 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
           } else if (strcmp(msgTypeInner, "debug_off") == 0) {
             debugLog("Debug mode disabled");
             debugModeEnabled = false;
+          } else if (strcmp(msgTypeInner, "rfid_enable") == 0) {
+            rfidEnabled = true;
+          } else if (strcmp(msgTypeInner, "rfid_disable") == 0) {
+            rfidEnabled = false;
+          } else if (strcmp(msgTypeInner, "rfid_write") == 0) {
+            handleRfidWrite(doc["internalId"] | "");
           } else if (strcmp(msgTypeInner, "wifi_credentials_get") == 0) {
             JsonDocument resp;
             resp["type"] = "wifi_credentials";
@@ -440,6 +587,7 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
 
     case WStype_CONNECTED: {
+      rfidEnabled = false; // app controls RFID state; reset to known baseline on reconnect
       debugLog("Connected to hub, sending hello");
       JsonDocument hello;
       hello["type"] = "hello";
@@ -473,6 +621,10 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
       } else if (strcmp(msgType, "debug_off") == 0) {
         debugLog("Debug mode disabled");
         debugModeEnabled = false;
+      } else if (strcmp(msgType, "rfid_enable") == 0) {
+        rfidEnabled = true;
+      } else if (strcmp(msgType, "rfid_disable") == 0) {
+        rfidEnabled = false;
       } else if (strcmp(msgType, "wifi_credentials_set") == 0) {
         JsonArray arr = doc["credentials"].as<JsonArray>();
         credentialCount = 0;
@@ -610,6 +762,11 @@ void setup() {
 
   Serial.println("Herald booting...");
   Serial.printf("Firmware version: %s\n", FIRMWARE_VERSION);
+
+  SPI.begin(RFID_SCK_PIN, RFID_MISO_PIN, RFID_MOSI_PIN, RFID_SS_PIN);
+  rfid.PCD_Init();
+  Serial.println("RFID reader initialised");
+
   loadCredentials();
 
   if (!connectWifi()) {
@@ -628,6 +785,8 @@ void setup() {
 // ---- Loop ----
 
 void loop() {
+  loopRfid();
+
   if (isHub) {
     wsServer.loop();
 
