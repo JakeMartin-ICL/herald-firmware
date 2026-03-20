@@ -15,19 +15,15 @@ build_flags =
     -DFIRMWARE_VERSION='"1.2.0"'
 ```
 
-### 2. Update the changelog
-
-Add an entry to `CHANGELOG.md` describing what changed. The GitHub release body is populated from this file.
-
-### 3. Commit and push
+### 2. Commit and push
 
 ```bash
-git add platformio.ini CHANGELOG.md
+git add platformio.ini
 git commit -m "Release v1.2.0"
 git push
 ```
 
-### 4. Tag the commit
+### 3. Tag the commit
 
 ```bash
 git tag v1.2.0
@@ -40,7 +36,9 @@ Pushing the tag triggers the GitHub Actions workflow (`.github/workflows/release
 2. Copies the output `.bin` to `releases/herald-firmware.bin`
 3. Creates a GitHub release named `Herald Firmware v1.2.0` with the `.bin` attached
 
-### 5. Verify the release
+Release notes are generated automatically from commit messages since the previous tag, so no changelog file is needed.
+
+### 4. Verify the release
 
 Go to the repository's **Releases** page and confirm the release was created with `herald-firmware.bin` attached. The Herald web app fetches this via the GitHub API and will show an update prompt on any connected box running an older version.
 

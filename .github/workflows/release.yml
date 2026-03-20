@@ -13,10 +13,26 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed to walk git history for release notes
 
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes from commits
+        id: notes
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${GITHUB_REF_NAME}^"
+          else
+            RANGE="${GITHUB_REF_NAME}^"
+          fi
+          NOTES=$(git log $RANGE --pretty=format:"- %s" --no-merges)
+          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,7 +53,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Herald Firmware ${{ github.ref_name }}
-          body_path: CHANGELOG.md
+          body: ${{ steps.notes.outputs.NOTES }}
           fail_on_unmatched_files: false
           files: releases/herald-firmware.bin
         env:
