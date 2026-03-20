@@ -1,0 +1,42 @@
+name: Build and Release Firmware
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Patch version in platformio.ini
+        run: |
+          sed -i "s/-DFIRMWARE_VERSION=.*/-DFIRMWARE_VERSION='\"${{ steps.version.outputs.VERSION }}\"'/" platformio.ini
+
+      - name: Build firmware
+        run: pio run -e esp32dev-release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Herald Firmware ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          fail_on_unmatched_files: false
+          files: releases/herald-firmware.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
