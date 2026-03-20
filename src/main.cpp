@@ -648,7 +648,9 @@ void loop() {
       doc["hwid"] = myHwId;
       doc["version"] = otaCompleteVersion;
       forwardToApp(doc);
-      delay(500);
+      delay(200); // let ota_complete be sent
+      if (appClientNum >= 0) wsServer.disconnect(appClientNum); // clean close so app detects disconnect immediately
+      delay(200); // let close frame be sent
       ESP.restart();
     }
   } else {
