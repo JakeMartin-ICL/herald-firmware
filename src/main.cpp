@@ -512,7 +512,7 @@ void electHub() {
 #else
   WiFiClient testClient;
   Serial.println("Trying to find hub...");
-  if (testClient.connect(String(HUB_HOSTNAME) + ".local", WS_PORT)) {
+  if (testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT)) {
     testClient.stop();
     Serial.println("Hub found!");
     becomeClient();
