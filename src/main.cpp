@@ -9,6 +9,7 @@
 #include <HTTPUpdate.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include "freertos/queue.h"
 
 #ifdef LOCAL_BUILD
 #include "secrets.h"
@@ -91,6 +92,14 @@ bool isHub = false;
 String myHwId = "";
 bool debugModeEnabled = false;
 bool otaInProgress = false;
+volatile bool otaComplete = false;
+QueueHandle_t otaProgressQueue = NULL;
+int otaLastPercent = -1;
+
+struct OtaArgs {
+  char url[512];
+  char version[64];
+};
 
 WebSocketsServer wsServer(WS_PORT);
 WebSocketsClient wsClient;
@@ -180,59 +189,100 @@ void sendToHub(JsonDocument& doc) {
 void otaProgressCallback(int current, int total) {
   if (total <= 0) return;
   int percent = (current * 100) / total;
-  JsonDocument doc;
-  doc["type"] = "ota_progress";
-  doc["hwid"] = myHwId;
-  doc["percent"] = percent;
+  if (percent == otaLastPercent) return;
+  otaLastPercent = percent;
+
   if (isHub) {
+    JsonDocument doc;
+    doc["type"] = "ota_progress";
+    doc["hwid"] = myHwId;
+    doc["percent"] = percent;
     forwardToApp(doc);
-  } else {
-    sendToHub(doc);
+  } else if (otaProgressQueue) {
+    xQueueSend(otaProgressQueue, &percent, 0);
   }
+}
+
+// Client OTA task — runs in background so main loop keeps calling wsClient.loop(),
+// draining the receive buffer naturally without re-entrant loop() calls.
+void otaTaskFn(void* param) {
+  OtaArgs* args = (OtaArgs*)param;
+
+  WiFiClientSecure wifiClient;
+  wifiClient.setInsecure();
+  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  httpUpdate.onProgress(otaProgressCallback);
+
+  t_httpUpdate_return ret = httpUpdate.update(wifiClient, args->url);
+  delete args;
+
+  if (ret == HTTP_UPDATE_OK) {
+    otaComplete = true; // main loop handles clean disconnect + restart
+  } else {
+    Serial.printf("OTA failed: %s\n", httpUpdate.getLastErrorString().c_str());
+    if (otaProgressQueue) {
+      vQueueDelete(otaProgressQueue);
+      otaProgressQueue = NULL;
+    }
+    otaInProgress = false;
+  }
+
+  vTaskDelete(NULL);
 }
 
 void performOtaUpdate(const char* url, const char* version) {
   if (otaInProgress) return;
   otaInProgress = true;
+  otaLastPercent = -1;
 
   debugLog("OTA: starting update from " + String(url));
 
-  WiFiClientSecure wifiClient;
-  wifiClient.setInsecure(); // GitHub releases require HTTPS; skip cert verification for OTA
-  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS); // GitHub releases 302 to CDN
-  httpUpdate.onProgress(otaProgressCallback);
+  if (isHub) {
+    // Hub OTA: synchronous, no re-entrancy issue (progress callback only writes, doesn't loop)
+    WiFiClientSecure wifiClient;
+    wifiClient.setInsecure();
+    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    httpUpdate.onProgress(otaProgressCallback);
 
-  t_httpUpdate_return ret = httpUpdate.update(wifiClient, url);
+    t_httpUpdate_return ret = httpUpdate.update(wifiClient, url);
 
-  switch (ret) {
-    case HTTP_UPDATE_OK: {
-      debugLog("OTA: update OK, rebooting");
-      JsonDocument doc;
-      doc["type"] = "ota_complete";
-      doc["hwid"] = myHwId;
-      doc["version"] = version;
-      if (isHub) forwardToApp(doc);
-      else sendToHub(doc);
-      delay(500);
-      ESP.restart();
-      break;
+    switch (ret) {
+      case HTTP_UPDATE_OK: {
+        debugLog("OTA: update OK, rebooting");
+        JsonDocument doc;
+        doc["type"] = "ota_complete";
+        doc["hwid"] = myHwId;
+        doc["version"] = version;
+        forwardToApp(doc);
+        delay(500);
+        ESP.restart();
+        break;
+      }
+      case HTTP_UPDATE_FAILED: {
+        String err = httpUpdate.getLastErrorString();
+        debugLog("OTA: update failed: " + err);
+        JsonDocument doc;
+        doc["type"] = "ota_error";
+        doc["hwid"] = myHwId;
+        doc["message"] = err;
+        forwardToApp(doc);
+        otaInProgress = false;
+        break;
+      }
+      case HTTP_UPDATE_NO_UPDATES:
+        debugLog("OTA: no updates available");
+        otaInProgress = false;
+        break;
     }
-    case HTTP_UPDATE_FAILED: {
-      String err = httpUpdate.getLastErrorString();
-      debugLog("OTA: update failed: " + err);
-      JsonDocument doc;
-      doc["type"] = "ota_error";
-      doc["hwid"] = myHwId;
-      doc["message"] = err;
-      if (isHub) forwardToApp(doc);
-      else sendToHub(doc);
-      otaInProgress = false;
-      break;
-    }
-    case HTTP_UPDATE_NO_UPDATES:
-      debugLog("OTA: no updates available");
-      otaInProgress = false;
-      break;
+  } else {
+    // Client OTA: run in background task so main loop keeps draining wsClient receive buffer
+    otaProgressQueue = xQueueCreate(20, sizeof(int));
+    OtaArgs* args = new OtaArgs();
+    strncpy(args->url, url, sizeof(args->url) - 1);
+    args->url[sizeof(args->url) - 1] = '\0';
+    strncpy(args->version, version, sizeof(args->version) - 1);
+    args->version[sizeof(args->version) - 1] = '\0';
+    xTaskCreate(otaTaskFn, "ota", 16384, args, 1, NULL);
   }
 }
 
@@ -304,6 +354,16 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
         } else if (strcmp(clientType, "box") == 0) {
           const char* hwId = doc["hwid"];
           const char* version = doc["version"] | "";
+
+          // Evict any stale slot with the same HWID (e.g. box reconnected on a new WS connection)
+          for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (i != clientNum && clientHwIds[i] == hwId) {
+              debugLog("Box " + String(hwId) + " evicting stale slot " + String(i));
+              clientHwIds[i] = "";
+              clientVersions[i] = "";
+            }
+          }
+
           clientHwIds[clientNum] = hwId;
           clientVersions[clientNum] = version;
 
@@ -613,7 +673,24 @@ void loop() {
   if (isHub) {
     wsServer.loop();
   } else {
+    if (otaComplete) {
+      wsClient.disconnect();
+      delay(200);
+      ESP.restart();
+    }
+
     wsClient.loop();
+
+    if (otaProgressQueue) {
+      int percent;
+      if (xQueueReceive(otaProgressQueue, &percent, 0) == pdTRUE) {
+        JsonDocument doc;
+        doc["type"] = "ota_progress";
+        doc["hwid"] = myHwId;
+        doc["percent"] = percent;
+        sendToHub(doc);
+      }
+    }
   }
 
   handleButtons();
