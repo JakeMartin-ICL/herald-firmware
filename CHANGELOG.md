@@ -11,3 +11,7 @@
 ## v0.1.2
 
 - Fixed client OTA bugs
+
+## v0.1.3
+
+- Apply client OTA fixes to hub OTA
