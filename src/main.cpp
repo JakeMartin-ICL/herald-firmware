@@ -239,17 +239,17 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
   switch (type) {
 
     case WStype_CONNECTED:
-      Serial.printf("WS client %d connected, awaiting hello\n", clientNum);
+      debugLog("WS client " + String(clientNum) + " connected, awaiting hello");
       break;
 
     case WStype_DISCONNECTED: {
       if (clientIsApp[clientNum]) {
-        Serial.println("App disconnected");
+        debugLog("App disconnected");
         appClientNum = -1;
         clientIsApp[clientNum] = false;
       } else if (clientHwIds[clientNum] != "") {
         String hwId = clientHwIds[clientNum];
-        Serial.printf("Box %s disconnected\n", hwId.c_str());
+        debugLog("Box " + hwId + " disconnected");
         JsonDocument notify;
         notify["type"] = "disconnected";
         notify["hwid"] = hwId;
@@ -271,7 +271,7 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
         if (strcmp(clientType, "app") == 0) {
           clientIsApp[clientNum] = true;
           appClientNum = clientNum;
-          Serial.println("App connected");
+          debugLog("App connected");
 
           // Acknowledge with version
           JsonDocument ack;
@@ -317,7 +317,7 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
           notify["version"] = version;
           forwardToApp(notify);
 
-          Serial.printf("Box %s connected (ws client %d)\n", hwId, clientNum);
+          debugLog("Box " + String(hwId) + " connected (ws client " + String(clientNum) + ")");
         }
         break;
       }
@@ -362,8 +362,8 @@ void onServerEvent(uint8_t clientNum, WStype_t type, uint8_t* payload, size_t le
             debugModeEnabled = true;
             debugLog("Debug mode enabled");
           } else if (strcmp(msgTypeInner, "debug_off") == 0) {
+            debugLog("Debug mode disabled");
             debugModeEnabled = false;
-            Serial.println("Debug mode disabled");
           } else if (strcmp(msgTypeInner, "wifi_credentials_get") == 0) {
             JsonDocument resp;
             resp["type"] = "wifi_credentials";
@@ -419,7 +419,7 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
 
     case WStype_CONNECTED: {
-      Serial.println("Connected to hub, sending hello");
+      debugLog("Connected to hub, sending hello");
       JsonDocument hello;
       hello["type"] = "hello";
       hello["client"] = "box";
@@ -432,7 +432,7 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
 
     case WStype_DISCONNECTED:
-      Serial.println("Disconnected from hub, will retry...");
+      debugLog("Disconnected from hub, will retry...");
       break;
 
     case WStype_TEXT: {
@@ -441,7 +441,7 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
       const char* msgType = doc["type"];
 
       if (strcmp(msgType, "assigned") == 0) {
-        Serial.printf("Confirmed hwid: %s\n", myHwId.c_str());
+        debugLog("Confirmed hwid: " + myHwId);
       } else if (strcmp(msgType, "led") == 0) {
         handleLedCommand(doc);
       } else if (strcmp(msgType, "ota_update") == 0) {
@@ -450,8 +450,8 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
         debugModeEnabled = true;
         debugLog("Debug mode enabled");
       } else if (strcmp(msgType, "debug_off") == 0) {
+        debugLog("Debug mode disabled");
         debugModeEnabled = false;
-        Serial.println("Debug mode disabled");
       } else if (strcmp(msgType, "wifi_credentials_set") == 0) {
         JsonArray arr = doc["credentials"].as<JsonArray>();
         credentialCount = 0;
