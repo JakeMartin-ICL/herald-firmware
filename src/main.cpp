@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <WebSocketsServer.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
@@ -196,7 +197,8 @@ void performOtaUpdate(const char* url, const char* version) {
 
   debugLog("OTA: starting update from " + String(url));
 
-  WiFiClient wifiClient;
+  WiFiClientSecure wifiClient;
+  wifiClient.setInsecure(); // GitHub releases require HTTPS; skip cert verification for OTA
   httpUpdate.onProgress(otaProgressCallback);
 
   t_httpUpdate_return ret = httpUpdate.update(wifiClient, url);
