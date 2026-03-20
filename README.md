@@ -8,9 +8,17 @@ Firmware for Herald LED game boxes (ESP32). Boxes self-elect a hub via mDNS and 
 
 ### Using the release script
 
-`release.sh` automates all steps below. It reads the current version from `platformio.ini`, bumps it, and handles the commit, push, tag, and tag push.
+`release.ps1` (Windows) and `release.sh` (Linux/macOS) automate all steps below. They read the current version from `platformio.ini`, bump it, and handle the commit, push, tag, and tag push.
+
+```powershell
+# Windows
+.\release.ps1          # patch bump: 0.1.3 → 0.1.4
+.\release.ps1 -Minor   # minor bump: 0.1.3 → 0.2.0
+.\release.ps1 -Major   # major bump: 0.1.3 → 1.0.0
+```
 
 ```bash
+# Linux/macOS
 ./release.sh           # patch bump: 0.1.3 → 0.1.4
 ./release.sh --minor   # minor bump: 0.1.3 → 0.2.0
 ./release.sh --major   # major bump: 0.1.3 → 1.0.0
