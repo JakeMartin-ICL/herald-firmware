@@ -2,12 +2,14 @@
 set -e
 
 BUMP=patch
+RETAG=false
 
 for arg in "$@"; do
   case $arg in
     --patch) BUMP=patch ;;
     --minor) BUMP=minor ;;
     --major) BUMP=major ;;
+    --retag) RETAG=true ;;
     *) echo "Unknown argument: $arg"; exit 1 ;;
   esac
 done
@@ -18,6 +20,23 @@ CURRENT=$(grep -o "DFIRMWARE_VERSION='\"[^\"]*\"'" platformio.ini | grep -o '[0-
 if [ -z "$CURRENT" ]; then
   echo "Error: could not find DFIRMWARE_VERSION in platformio.ini"
   exit 1
+fi
+
+if [ "$RETAG" = true ]; then
+  TAG="v$CURRENT"
+  echo "Current version: $CURRENT"
+  echo ""
+  read -p "About to force-move $TAG to HEAD and re-trigger the pipeline. Continue? [y/N] " confirm
+  case $confirm in
+    [yY]*) ;;
+    *) echo "Aborted."; exit 1 ;;
+  esac
+  git tag -f "$TAG"
+  git push --force origin "$TAG"
+  echo ""
+  echo "Re-tagged $TAG — pipeline running at:"
+  echo "https://github.com/$(git remote get-url origin | sed 's/.*github.com[:/]\(.*\)\.git/\1/')/actions"
+  exit 0
 fi
 
 # Parse and bump

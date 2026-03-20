@@ -1,6 +1,7 @@
 param(
     [switch]$Minor,
-    [switch]$Major
+    [switch]$Major,
+    [switch]$Retag
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,25 @@ if (-not $line -or $line -notmatch '(\d+\.\d+\.\d+)') {
     exit 1
 }
 $current = $Matches[1]
+
+if ($Retag) {
+    $tag = "v$current"
+    Write-Host "Current version: $current"
+    Write-Host ""
+    $confirm = Read-Host "About to force-move $tag to HEAD and re-trigger the pipeline. Continue? [y/N]"
+    if ($confirm -notmatch '^[yY]') {
+        Write-Host "Aborted."
+        exit 1
+    }
+    git tag -f $tag
+    git push --force origin $tag
+    $remote = git remote get-url origin
+    $repo = $remote -replace '.*github\.com[:/](.+?)(\.git)?$', '$1'
+    Write-Host ""
+    Write-Host "Re-tagged $tag - pipeline running at:"
+    Write-Host "https://github.com/$repo/actions"
+    exit 0
+}
 
 # Parse and bump
 $parts = $current -split '\.'
