@@ -199,6 +199,7 @@ void performOtaUpdate(const char* url, const char* version) {
 
   WiFiClientSecure wifiClient;
   wifiClient.setInsecure(); // GitHub releases require HTTPS; skip cert verification for OTA
+  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS); // GitHub releases 302 to CDN
   httpUpdate.onProgress(otaProgressCallback);
 
   t_httpUpdate_return ret = httpUpdate.update(wifiClient, url);
