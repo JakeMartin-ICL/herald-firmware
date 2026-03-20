@@ -93,6 +93,7 @@ String myHwId = "";
 bool debugModeEnabled = false;
 bool otaInProgress = false;
 volatile bool otaComplete = false;
+char otaCompleteVersion[64] = "";
 QueueHandle_t otaProgressQueue = NULL;
 int otaLastPercent = -1;
 
@@ -192,13 +193,7 @@ void otaProgressCallback(int current, int total) {
   if (percent == otaLastPercent) return;
   otaLastPercent = percent;
 
-  if (isHub) {
-    JsonDocument doc;
-    doc["type"] = "ota_progress";
-    doc["hwid"] = myHwId;
-    doc["percent"] = percent;
-    forwardToApp(doc);
-  } else if (otaProgressQueue) {
+  if (otaProgressQueue) {
     xQueueSend(otaProgressQueue, &percent, 0);
   }
 }
@@ -217,7 +212,8 @@ void otaTaskFn(void* param) {
   delete args;
 
   if (ret == HTTP_UPDATE_OK) {
-    otaComplete = true; // main loop handles clean disconnect + restart
+    strncpy(otaCompleteVersion, args->version, sizeof(otaCompleteVersion) - 1);
+    otaComplete = true; // main loop handles notification, clean disconnect, and restart
   } else {
     Serial.printf("OTA failed: %s\n", httpUpdate.getLastErrorString().c_str());
     if (otaProgressQueue) {
@@ -237,53 +233,15 @@ void performOtaUpdate(const char* url, const char* version) {
 
   debugLog("OTA: starting update from " + String(url));
 
-  if (isHub) {
-    // Hub OTA: synchronous, no re-entrancy issue (progress callback only writes, doesn't loop)
-    WiFiClientSecure wifiClient;
-    wifiClient.setInsecure();
-    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    httpUpdate.onProgress(otaProgressCallback);
-
-    t_httpUpdate_return ret = httpUpdate.update(wifiClient, url);
-
-    switch (ret) {
-      case HTTP_UPDATE_OK: {
-        debugLog("OTA: update OK, rebooting");
-        JsonDocument doc;
-        doc["type"] = "ota_complete";
-        doc["hwid"] = myHwId;
-        doc["version"] = version;
-        forwardToApp(doc);
-        delay(500);
-        ESP.restart();
-        break;
-      }
-      case HTTP_UPDATE_FAILED: {
-        String err = httpUpdate.getLastErrorString();
-        debugLog("OTA: update failed: " + err);
-        JsonDocument doc;
-        doc["type"] = "ota_error";
-        doc["hwid"] = myHwId;
-        doc["message"] = err;
-        forwardToApp(doc);
-        otaInProgress = false;
-        break;
-      }
-      case HTTP_UPDATE_NO_UPDATES:
-        debugLog("OTA: no updates available");
-        otaInProgress = false;
-        break;
-    }
-  } else {
-    // Client OTA: run in background task so main loop keeps draining wsClient receive buffer
-    otaProgressQueue = xQueueCreate(20, sizeof(int));
-    OtaArgs* args = new OtaArgs();
-    strncpy(args->url, url, sizeof(args->url) - 1);
-    args->url[sizeof(args->url) - 1] = '\0';
-    strncpy(args->version, version, sizeof(args->version) - 1);
-    args->version[sizeof(args->version) - 1] = '\0';
-    xTaskCreate(otaTaskFn, "ota", 16384, args, 1, NULL);
-  }
+  // Run OTA in a background task for both hub and client so the main loop keeps
+  // running (wsServer/wsClient.loop()), responding to pings and draining receive buffers.
+  otaProgressQueue = xQueueCreate(20, sizeof(int));
+  OtaArgs* args = new OtaArgs();
+  strncpy(args->url, url, sizeof(args->url) - 1);
+  args->url[sizeof(args->url) - 1] = '\0';
+  strncpy(args->version, version, sizeof(args->version) - 1);
+  args->version[sizeof(args->version) - 1] = '\0';
+  xTaskCreate(otaTaskFn, "ota", 16384, args, 1, NULL);
 }
 
 // ---- Hub event handler ----
@@ -672,6 +630,27 @@ void setup() {
 void loop() {
   if (isHub) {
     wsServer.loop();
+
+    if (otaProgressQueue) {
+      int percent;
+      if (xQueueReceive(otaProgressQueue, &percent, 0) == pdTRUE) {
+        JsonDocument doc;
+        doc["type"] = "ota_progress";
+        doc["hwid"] = myHwId;
+        doc["percent"] = percent;
+        forwardToApp(doc);
+      }
+    }
+
+    if (otaComplete) {
+      JsonDocument doc;
+      doc["type"] = "ota_complete";
+      doc["hwid"] = myHwId;
+      doc["version"] = otaCompleteVersion;
+      forwardToApp(doc);
+      delay(500);
+      ESP.restart();
+    }
   } else {
     if (otaComplete) {
       wsClient.disconnect();
