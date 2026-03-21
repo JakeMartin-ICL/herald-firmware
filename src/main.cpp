@@ -188,6 +188,10 @@ void setup() {
   Serial.println("Herald booting...");
   Serial.printf("Firmware version: %s\n", FIRMWARE_VERSION);
 
+  if (!SPIFFS.begin(true)) {
+    Serial.println("SPIFFS mount failed — state backup unavailable");
+  }
+
   initRfid();
 
   loadCredentials();

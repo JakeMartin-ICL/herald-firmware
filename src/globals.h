@@ -11,6 +11,7 @@
 #include <HTTPUpdate.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <SPIFFS.h>
 #include <SPI.h>
 #include <MFRC522.h>
 #include "freertos/queue.h"

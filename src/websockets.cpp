@@ -49,6 +49,28 @@ static void onServerDisconnected(uint8_t clientNum) {
   }
 }
 
+static void sendStoredStateBackup(uint8_t clientNum) {
+  if (!SPIFFS.exists("/game_state.json")) {
+    JsonDocument none;
+    none["type"] = "state_backup_none";
+    sendToClient(clientNum, none);
+    return;
+  }
+  File f = SPIFFS.open("/game_state.json", "r");
+  if (!f) return;
+  String stored = f.readString();
+  f.close();
+
+  JsonDocument stored_doc;
+  if (deserializeJson(stored_doc, stored) != DeserializationError::Ok) return;
+
+  JsonDocument msg;
+  msg["type"] = "state_backup";
+  msg["payload"] = stored_doc["payload"];
+  msg["compressed"] = stored_doc["compressed"];
+  sendToClient(clientNum, msg);
+}
+
 static void handleHelloFromApp(uint8_t clientNum) {
   clientIsApp[clientNum] = true;
   appClientNum = clientNum;
@@ -77,6 +99,9 @@ static void handleHelloFromApp(uint8_t clientNum) {
       sendToClient(clientNum, notify);
     }
   }
+
+  // Send saved game state if one exists
+  sendStoredStateBackup(clientNum);
 }
 
 static void handleHelloFromBox(uint8_t clientNum, JsonDocument& doc) {
@@ -128,6 +153,22 @@ static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
     rfidEnabled = false;
   } else if (strcmp(msgType, "rfid_write") == 0) {
     handleRfidWrite(doc["internalId"] | "");
+  } else if (strcmp(msgType, "state_backup") == 0) {
+    // Store { payload, compressed } to SPIFFS
+    JsonDocument stored;
+    stored["payload"] = doc["payload"];
+    stored["compressed"] = doc["compressed"];
+    String out;
+    serializeJson(stored, out);
+    File f = SPIFFS.open("/game_state.json", "w");
+    if (f) { f.print(out); f.close(); }
+    if (debugModeEnabled) {
+      debugLog("Game state backed up (" + String(out.length()) + " bytes)");
+    }
+  } else if (strcmp(msgType, "state_backup_get") == 0) {
+    sendStoredStateBackup(clientNum);
+  } else if (strcmp(msgType, "state_backup_clear") == 0) {
+    if (SPIFFS.exists("/game_state.json")) SPIFFS.remove("/game_state.json");
   } else if (strcmp(msgType, "wifi_credentials_get") == 0) {
     JsonDocument resp;
     resp["type"] = "wifi_credentials";
@@ -158,7 +199,11 @@ static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
 
 static void routeFromApp(uint8_t clientNum, JsonDocument& doc) {
   const char* targetHwId = doc["hwid"] | "";
-  if (strlen(targetHwId) == 0) return;
+  // Messages from the app with no hwid are directed at the hub itself
+  if (strlen(targetHwId) == 0) {
+    handleHubCommand(clientNum, doc);
+    return;
+  }
 
   // "all" — broadcast OTA to every connected box and handle hub's own update
   if (strcmp(targetHwId, "all") == 0) {
