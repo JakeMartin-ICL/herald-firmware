@@ -100,6 +100,13 @@ static void handleHelloFromApp(uint8_t clientNum) {
     }
   }
 
+  // Send hub's battery voltage immediately so app doesn't wait for the 60s timer
+  JsonDocument batt;
+  batt["type"] = "battery";
+  batt["hwid"] = myHwId;
+  batt["voltage"] = readBatteryVoltage();
+  sendToClient(clientNum, batt);
+
   // Send saved game state if one exists
   sendStoredStateBackup(clientNum);
 }
@@ -139,6 +146,12 @@ static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
 
   if (strcmp(msgType, "led") == 0) {
     handleLedCommand(doc);
+  } else if (strcmp(msgType, "led_anim") == 0) {
+    handleLedAnim(doc);
+  } else if (strcmp(msgType, "led_anim_stop") == 0) {
+    stopLedAnim();
+  } else if (strcmp(msgType, "display") == 0) {
+    handleDisplayCommand(doc);
   } else if (strcmp(msgType, "ota_update") == 0) {
     performOtaUpdate(doc["url"] | "", doc["version"] | "");
   } else if (strcmp(msgType, "debug_on") == 0) {
@@ -300,6 +313,12 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
         debugLog("Confirmed hwid: " + myHwId);
       } else if (strcmp(msgType, "led") == 0) {
         handleLedCommand(doc);
+      } else if (strcmp(msgType, "led_anim") == 0) {
+        handleLedAnim(doc);
+      } else if (strcmp(msgType, "led_anim_stop") == 0) {
+        stopLedAnim();
+      } else if (strcmp(msgType, "display") == 0) {
+        handleDisplayCommand(doc);
       } else if (strcmp(msgType, "ota_update") == 0) {
         performOtaUpdate(doc["url"] | "", doc["version"] | "");
       } else if (strcmp(msgType, "debug_on") == 0) {

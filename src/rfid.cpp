@@ -87,13 +87,12 @@ void loopRfid() {
 
   if (!ok) return;
 
-  if (content.length() == 0) {
-    Serial.println("RFID: blank tag, ignoring");
-    return;
-  }
-  if (content.indexOf(':') < 0) {
+  if (content.length() > 0 && content.indexOf(':') < 0) {
     Serial.printf("RFID: unrecognised format: %s\n", content.c_str());
     return;
+  }
+  if (content.length() == 0) {
+    Serial.println("RFID: blank tag");
   }
 
   debugLog("RFID tag read: " + content);

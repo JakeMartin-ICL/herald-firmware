@@ -22,13 +22,28 @@
 
 // ---- Pin defines ----
 
-#define BUTTON_ENDTURN 18
+#define BUTTON_ENDTURN 16
+#define BUTTON_PASS    14
 #define LED 2
 
-// RFID (MFRC522 via VSPI with custom SCK to avoid conflict with pin 18)
-#define RFID_SS_PIN   21
-#define RFID_RST_PIN  22
-#define RFID_SCK_PIN  14
+// LED ring (WS2812B)
+#define LED_RING_PIN   12
+#define LED_RING_COUNT 24
+
+// OLED display (SSD1306 via I2C)
+#define OLED_SDA 21
+#define OLED_SCL 22
+
+// Battery voltage ADC
+#define VBAT_PIN           34
+// Adjust to match actual resistor values: ratio = (R_high + R_low) / R_low
+// e.g. two equal resistors → 2.0; 100k + 47k → ~3.13
+#define VBAT_DIVIDER_RATIO 1.34f  // 6.8k + 20k voltage divider: (6.8+20)/20
+
+// RFID (MFRC522 via VSPI)
+#define RFID_SS_PIN   5
+#define RFID_RST_PIN  17
+#define RFID_SCK_PIN  18
 #define RFID_MISO_PIN 19
 #define RFID_MOSI_PIN 23
 
@@ -76,11 +91,18 @@ extern int credentialCount;
 // ---- Cross-file function prototypes ----
 
 // main.cpp
+float readBatteryVoltage();
 void debugLog(const char* message);
 void debugLog(String message);
 void sendToHub(JsonDocument& doc);
 void setLed(bool on);
+void initLedRing();
 void handleLedCommand(JsonDocument& doc);
+void handleLedAnim(JsonDocument& doc);
+void stopLedAnim();
+void tickLedAnim();
+void initDisplay();
+void handleDisplayCommand(JsonDocument& doc);
 void saveCredentials();
 
 // websockets.cpp
