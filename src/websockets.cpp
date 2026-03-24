@@ -98,6 +98,14 @@ static void handleHelloFromApp(uint8_t clientNum) {
       sendToClient(clientNum, notify);
     }
   }
+  // Report ESP-NOW connected boxes (client boxes that don't use WebSocket)
+  for (int i = 0; i < getEspNowPeerCount(); i++) {
+    JsonDocument notify;
+    notify["type"] = "connected";
+    notify["hwid"] = getEspNowPeerHwid(i);
+    notify["version"] = getEspNowPeerVersion(i);
+    sendToClient(clientNum, notify);
+  }
 
   // Send hub's battery voltage immediately so app doesn't wait for the 60s timer
   JsonDocument batt;

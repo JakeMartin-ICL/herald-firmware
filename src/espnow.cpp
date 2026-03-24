@@ -5,6 +5,7 @@
 struct EspNowPeer {
   uint8_t mac[6];
   String  hwid;
+  String  version;
 };
 
 static EspNowPeer peers[MAX_CLIENTS];
@@ -36,17 +37,22 @@ static String hwIdForMac(const uint8_t* mac) {
   return "";
 }
 
-static void registerBoxPeer(const uint8_t* mac, const String& hwid) {
+static void registerBoxPeer(const uint8_t* mac, const String& hwid, const String& version) {
   // Update existing entry or add new
   for (int i = 0; i < peerCount; i++) {
-    if (macEqual(peers[i].mac, mac)) { peers[i].hwid = hwid; return; }
+    if (macEqual(peers[i].mac, mac)) { peers[i].hwid = hwid; peers[i].version = version; return; }
   }
   if (peerCount >= MAX_CLIENTS) return;
   memcpy(peers[peerCount].mac, mac, 6);
   peers[peerCount].hwid = hwid;
+  peers[peerCount].version = version;
   peerCount++;
   addEspNowPeer(mac);
 }
+
+int getEspNowPeerCount() { return peerCount; }
+const String& getEspNowPeerHwid(int i) { return peers[i].hwid; }
+const String& getEspNowPeerVersion(int i) { return peers[i].version; }
 
 // ---- Send helpers ----
 
@@ -104,7 +110,7 @@ static void onEspNowRecv(const uint8_t* mac_addr, const uint8_t* data, int len) 
     if (strcmp(msgType, "hello") == 0) {
       const char* hwid    = doc["hwid"]    | "";
       const char* version = doc["version"] | "";
-      registerBoxPeer(mac_addr, String(hwid));
+      registerBoxPeer(mac_addr, String(hwid), String(version));
 
       // Acknowledge so the client learns our MAC
       JsonDocument ack;

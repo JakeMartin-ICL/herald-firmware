@@ -384,16 +384,22 @@ static void startAnimEngine(int frameCount, bool loop) {
   if (!animFrames[0].fade) showAnimFrame(0);
 }
 
-static void applyLedAnimBreathe(const char* colorHex, uint32_t halfPeriodMs) {
+static void applyLedAnimBreathe(const char* colorHex, bool rainbow, uint32_t halfPeriodMs) {
   stopLedAnim();
-  uint8_t r, g, b;
-  parseHexColorRaw(colorHex, r, g, b);
-  // Frame 0: full brightness, fade to dim
   animFrames[0].ms = halfPeriodMs; animFrames[0].fade = true;
-  for (int i = 0; i < LED_RING_COUNT; i++) { animFrames[0].r[i] = r; animFrames[0].g[i] = g; animFrames[0].b[i] = b; }
-  // Frame 1: 5% brightness, fade back up
   animFrames[1].ms = halfPeriodMs; animFrames[1].fade = true;
-  for (int i = 0; i < LED_RING_COUNT; i++) { animFrames[1].r[i] = r*5/100; animFrames[1].g[i] = g*5/100; animFrames[1].b[i] = b*5/100; }
+  if (rainbow) {
+    for (int i = 0; i < LED_RING_COUNT; i++) {
+      CRGB c = CHSV((uint8_t)((i * 255) / LED_RING_COUNT), 255, 255);
+      animFrames[0].r[i] = c.r; animFrames[0].g[i] = c.g; animFrames[0].b[i] = c.b;
+      animFrames[1].r[i] = c.r*5/100; animFrames[1].g[i] = c.g*5/100; animFrames[1].b[i] = c.b*5/100;
+    }
+  } else {
+    uint8_t r, g, b;
+    parseHexColorRaw(colorHex, r, g, b);
+    for (int i = 0; i < LED_RING_COUNT; i++) { animFrames[0].r[i] = r; animFrames[0].g[i] = g; animFrames[0].b[i] = b; }
+    for (int i = 0; i < LED_RING_COUNT; i++) { animFrames[1].r[i] = r*5/100; animFrames[1].g[i] = g*5/100; animFrames[1].b[i] = b*5/100; }
+  }
   startAnimEngine(2, true);
 }
 
@@ -510,7 +516,7 @@ void handleLedPatternCommand(JsonDocument& doc) {
   else if (strcmp(t, "led_rainbow")        == 0) applyLedRainbow();
   else if (strcmp(t, "led_thirds")         == 0) applyLedThirds(doc["c1"] | "#000000", doc["c2"] | "#000000", doc["c3"] | "#000000");
   else if (strcmp(t, "led_sectors")        == 0) applyLedSectors(doc);
-  else if (strcmp(t, "led_anim_breathe")   == 0) applyLedAnimBreathe(doc["color"] | "#ffffff", doc["halfPeriodMs"] | 2000);
+  else if (strcmp(t, "led_anim_breathe")   == 0) applyLedAnimBreathe(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["halfPeriodMs"] | 2000);
   else if (strcmp(t, "led_anim_spinner")   == 0) applyLedAnimSpinner(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["stepMs"] | 50);
   else if (strcmp(t, "led_anim_choosing")  == 0) applyLedAnimChoosing(doc);
   else if (strcmp(t, "led_anim_upkeep")    == 0) applyLedAnimUpkeep();

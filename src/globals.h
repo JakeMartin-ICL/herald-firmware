@@ -120,6 +120,9 @@ void sendHelloEspNow();
 void sendToBoxEspNow(const String& hwid, JsonDocument& doc);
 void sendToAllBoxesEspNow(JsonDocument& doc);
 void sendToHubEspNow(JsonDocument& doc);
+int getEspNowPeerCount();
+const String& getEspNowPeerHwid(int i);
+const String& getEspNowPeerVersion(int i);
 
 // rfid.cpp
 void initRfid();
