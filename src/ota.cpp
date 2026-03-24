@@ -46,6 +46,17 @@ void performOtaUpdate(const char* url, const char* version) {
   otaInProgress = true;
   otaLastPercent = -1;
 
+  // Client boxes disconnect WiFi after election; reconnect now for the HTTP download.
+  if (!isHub && WiFi.status() != WL_CONNECTED) {
+    debugLog("OTA: reconnecting WiFi...");
+    extern bool connectWifi();
+    if (!connectWifi()) {
+      debugLog("OTA: WiFi reconnect failed, aborting");
+      otaInProgress = false;
+      return;
+    }
+  }
+
   debugLog("OTA: starting update from " + String(url));
 
   // Run OTA in a background task for both hub and client so the main loop keeps

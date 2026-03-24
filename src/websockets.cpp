@@ -381,6 +381,8 @@ void becomeClient() {
   Serial.println("Becoming client — using ESP-NOW for box communication");
   initEspNow();
   sendHelloEspNow();
+  WiFi.disconnect(true); // no longer needed until OTA; saves ~70mA idle draw
+  Serial.println("WiFi disconnected (client mode)");
 }
 
 // ---- Election ----
