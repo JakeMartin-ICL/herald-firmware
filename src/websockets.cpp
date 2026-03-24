@@ -389,7 +389,7 @@ void becomeClient() {
   Serial.println("Becoming client — using ESP-NOW for box communication");
   initEspNow();
   sendHelloEspNow();
-  WiFi.disconnect(true); // no longer needed until OTA; saves ~70mA idle draw
+  WiFi.disconnect(false); // drop AP association but keep radio on for ESP-NOW
   Serial.println("WiFi disconnected (client mode)");
   showClientOnDisplay();
 }
