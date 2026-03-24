@@ -144,12 +144,8 @@ static void handleHelloFromBox(uint8_t clientNum, JsonDocument& doc) {
 static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
   const char* msgType = doc["type"] | "";
 
-  if (strcmp(msgType, "led") == 0) {
-    handleLedCommand(doc);
-  } else if (strcmp(msgType, "led_anim") == 0) {
-    handleLedAnim(doc);
-  } else if (strcmp(msgType, "led_anim_stop") == 0) {
-    stopLedAnim();
+  if (strncmp(msgType, "led", 3) == 0) {
+    handleLedPatternCommand(doc);
   } else if (strcmp(msgType, "display") == 0) {
     handleDisplayCommand(doc);
   } else if (strcmp(msgType, "ota_update") == 0) {
@@ -201,8 +197,15 @@ static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
       credentialCount++;
     }
     saveCredentials();
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-      if (clientHwIds[i] != "" && !clientIsApp[i]) sendToClient(i, doc);
+    // Forward credentials to clients one at a time (ESP-NOW 250-byte limit)
+    for (int i = 0; i < credentialCount; i++) {
+      JsonDocument cred;
+      cred["type"] = "wifi_cred";
+      cred["index"] = i;
+      cred["total"] = credentialCount;
+      cred["ssid"] = credentials[i].ssid;
+      cred["password"] = credentials[i].password;
+      sendToAllBoxesEspNow(cred);
     }
     JsonDocument ack;
     ack["type"] = "wifi_credentials_ack";
@@ -218,13 +221,16 @@ static void routeFromApp(uint8_t clientNum, JsonDocument& doc) {
     return;
   }
 
-  // "all" — broadcast OTA to every connected box and handle hub's own update
+  // "all" — broadcast to every connected box and handle hub's own update
   if (strcmp(targetHwId, "all") == 0) {
-    if (strcmp(doc["type"] | "", "ota_update") == 0) {
-      for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clientHwIds[i] != "" && !clientIsApp[i]) sendToClient(i, doc);
-      }
+    sendToAllBoxesEspNow(doc);
+    const char* msgType = doc["type"] | "";
+    if (strcmp(msgType, "ota_update") == 0) {
       performOtaUpdate(doc["url"] | "", doc["version"] | "");
+    } else if (strncmp(msgType, "led", 3) == 0) {
+      handleLedPatternCommand(doc);
+    } else if (strcmp(msgType, "display") == 0) {
+      handleDisplayCommand(doc);
     }
     return;
   }
@@ -235,13 +241,8 @@ static void routeFromApp(uint8_t clientNum, JsonDocument& doc) {
     return;
   }
 
-  // Forward to the target box
-  for (int i = 0; i < MAX_CLIENTS; i++) {
-    if (clientHwIds[i] == targetHwId) {
-      sendToClient(i, doc);
-      return;
-    }
-  }
+  // Forward to the target box via ESP-NOW
+  sendToBoxEspNow(String(targetHwId), doc);
 }
 
 // ---- Hub event handler ----
@@ -358,7 +359,10 @@ void becomeHub() {
   Serial.println("Becoming hub");
   wsServer.begin();
   wsServer.onEvent(onServerEvent);
+  wsServer.enableHeartbeat(15000, 3000, 2);
   Serial.printf("WebSocket server started on port %d\n", WS_PORT);
+
+  initEspNow();
 
   if (MDNS.begin(HUB_HOSTNAME)) {
     MDNS.addService("ws", "tcp", WS_PORT);
@@ -375,10 +379,9 @@ void becomeHub() {
 
 void becomeClient() {
   isHub = false;
-  Serial.printf("Connecting to hub at %s.local:%d\n", HUB_HOSTNAME, WS_PORT);
-  wsClient.begin(String(HUB_HOSTNAME) + ".local", WS_PORT, "/");
-  wsClient.onEvent(onClientEvent);
-  wsClient.setReconnectInterval(RECONNECT_INTERVAL_MS);
+  Serial.println("Becoming client — using ESP-NOW for box communication");
+  initEspNow();
+  sendHelloEspNow();
 }
 
 // ---- Election ----
@@ -389,14 +392,25 @@ void electHub() {
 #elif defined(FORCE_CLIENT)
   becomeClient();
 #else
+  // Retry mDNS lookup a few times — mDNS multicast can be slow to propagate,
+  // especially on mobile hotspots. Without retries, two boxes may both elect
+  // themselves hub simultaneously.
   WiFiClient testClient;
-  Serial.println("Trying to find hub...");
-  if (testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT)) {
-    testClient.stop();
+  bool found = false;
+  for (int attempt = 1; attempt <= 3 && !found; attempt++) {
+    Serial.printf("Trying to find hub (attempt %d/3)...\n", attempt);
+    if (testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT)) {
+      testClient.stop();
+      found = true;
+    } else if (attempt < 3) {
+      delay(1000);
+    }
+  }
+  if (found) {
     Serial.println("Hub found!");
     becomeClient();
   } else {
-    Serial.println("No hub found");
+    Serial.println("No hub found — becoming hub");
     becomeHub();
   }
 #endif

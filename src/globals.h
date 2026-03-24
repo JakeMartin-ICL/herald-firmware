@@ -14,6 +14,7 @@
 #include <SPIFFS.h>
 #include <SPI.h>
 #include <MFRC522.h>
+#include <esp_now.h>
 #include "freertos/queue.h"
 
 #ifdef LOCAL_BUILD
@@ -99,9 +100,11 @@ void setLed(bool on);
 void initLedRing();
 void handleLedCommand(JsonDocument& doc);
 void handleLedAnim(JsonDocument& doc);
+void handleLedPatternCommand(JsonDocument& doc);
 void stopLedAnim();
 void tickLedAnim();
 void initDisplay();
+void showIpOnDisplay(const char* ip);
 void handleDisplayCommand(JsonDocument& doc);
 void saveCredentials();
 
@@ -109,6 +112,13 @@ void saveCredentials();
 extern int appClientNum;
 void forwardToApp(JsonDocument& doc);
 void electHub();
+
+// espnow.cpp
+void initEspNow();
+void sendHelloEspNow();
+void sendToBoxEspNow(const String& hwid, JsonDocument& doc);
+void sendToAllBoxesEspNow(JsonDocument& doc);
+void sendToHubEspNow(JsonDocument& doc);
 
 // rfid.cpp
 void initRfid();

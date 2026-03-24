@@ -81,10 +81,23 @@ String getHwId() {
 // ---- Battery voltage ----
 
 float readBatteryVoltage() {
-  // analogReadMilliVolts uses ESP32 factory eFuse calibration — no hardcoded
-  // full-scale reference needed, which varies chip to chip with 11dB attenuation.
-  float vAdc = analogReadMilliVolts(VBAT_PIN) / 1000.0f;
-  return vAdc * VBAT_DIVIDER_RATIO;
+  // Take 16 samples spread over ~32ms to average out brief current spikes
+  // (WiFi TX bursts, LED updates). analogReadMilliVolts uses eFuse calibration.
+  const int NUM_SAMPLES = 16;
+  uint32_t sum = 0;
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    sum += analogReadMilliVolts(VBAT_PIN);
+    if (i < NUM_SAMPLES - 1) delay(2);
+  }
+  float raw = (sum / (float)NUM_SAMPLES) / 1000.0f * VBAT_DIVIDER_RATIO;
+
+  // Exponential moving average (α=0.1) across calls to smooth load-dependent
+  // sag between reports. Initialise to the first raw reading.
+  static float filtered = -1.0f;
+  if (filtered < 0.0f) filtered = raw;
+  else filtered = 0.1f * raw + 0.9f * filtered;
+
+  return filtered;
 }
 
 // ---- Onboard LED ----
@@ -282,6 +295,230 @@ void tickLedAnim() {
   }
 }
 
+// ---- Named LED pattern handlers ----
+
+static void applyLedOff() {
+  stopLedAnim();
+  FastLED.clear();
+  FastLED.show();
+}
+
+static void applyLedSolid(const char* colorHex) {
+  stopLedAnim();
+  CRGB c = parseHexColor(colorHex);
+  fill_solid(ledRing, LED_RING_COUNT, c);
+  FastLED.show();
+}
+
+static void applyLedAlternate(const char* colorHex) {
+  stopLedAnim();
+  CRGB c = parseHexColor(colorHex);
+  for (int i = 0; i < LED_RING_COUNT; i++)
+    ledRing[i] = (i % 4 < 2) ? c : CRGB::Black;
+  FastLED.show();
+}
+
+static void applyLedAlternatePair(const char* aHex, const char* bHex) {
+  stopLedAnim();
+  CRGB ca = parseHexColor(aHex), cb = parseHexColor(bHex);
+  for (int i = 0; i < LED_RING_COUNT; i++)
+    ledRing[i] = (i % 4 < 2) ? ca : cb;
+  FastLED.show();
+}
+
+static void applyLedHalf(const char* colorHex, bool first) {
+  stopLedAnim();
+  CRGB c = parseHexColor(colorHex);
+  for (int i = 0; i < LED_RING_COUNT; i++)
+    ledRing[i] = ((i < LED_RING_COUNT / 2) == first) ? c : CRGB::Black;
+  FastLED.show();
+}
+
+static void applyLedRainbow() {
+  stopLedAnim();
+  for (int i = 0; i < LED_RING_COUNT; i++) {
+    uint8_t hue = (uint8_t)((i * 256) / LED_RING_COUNT);
+    CRGB c = CHSV(hue, 255, 255);
+    ledRing[i] = CRGB(GAMMA8[c.r], GAMMA8[c.g], GAMMA8[c.b]);
+  }
+  FastLED.show();
+}
+
+static void applyLedThirds(const char* c1Hex, const char* c2Hex, const char* c3Hex) {
+  stopLedAnim();
+  int t = LED_RING_COUNT / 3;
+  CRGB c1 = parseHexColor(c1Hex), c2 = parseHexColor(c2Hex), c3 = parseHexColor(c3Hex);
+  for (int i = 0; i < LED_RING_COUNT; i++) {
+    if (i < t)       ledRing[i] = c1;
+    else if (i < t*2) ledRing[i] = c2;
+    else              ledRing[i] = c3;
+  }
+  FastLED.show();
+}
+
+static void applyLedSectors(JsonDocument& doc) {
+  stopLedAnim();
+  FastLED.clear();
+  JsonArray sectors = doc["sectors"].as<JsonArray>();
+  int pos = 0;
+  for (JsonObject sector : sectors) {
+    CRGB c = parseHexColor(sector["color"] | "#000000");
+    int count = sector["count"] | 0;
+    for (int i = 0; i < count && pos < LED_RING_COUNT; i++, pos++)
+      ledRing[pos] = c;
+  }
+  FastLED.show();
+}
+
+// ---- Named animation helpers (build directly into animFrames[]) ----
+
+static void startAnimEngine(int frameCount, bool loop) {
+  animFrameCount = frameCount;
+  animLoops = loop ? -1 : 1;
+  memset(prevR, 0, sizeof(prevR));
+  memset(prevG, 0, sizeof(prevG));
+  memset(prevB, 0, sizeof(prevB));
+  animFrameIndex = 0;
+  animFrameStart = millis();
+  animLastFadeMs = 0;
+  if (!animFrames[0].fade) showAnimFrame(0);
+}
+
+static void applyLedAnimBreathe(const char* colorHex, uint32_t halfPeriodMs) {
+  stopLedAnim();
+  uint8_t r, g, b;
+  parseHexColorRaw(colorHex, r, g, b);
+  // Frame 0: full brightness, fade to dim
+  animFrames[0].ms = halfPeriodMs; animFrames[0].fade = true;
+  for (int i = 0; i < LED_RING_COUNT; i++) { animFrames[0].r[i] = r; animFrames[0].g[i] = g; animFrames[0].b[i] = b; }
+  // Frame 1: 5% brightness, fade back up
+  animFrames[1].ms = halfPeriodMs; animFrames[1].fade = true;
+  for (int i = 0; i < LED_RING_COUNT; i++) { animFrames[1].r[i] = r*5/100; animFrames[1].g[i] = g*5/100; animFrames[1].b[i] = b*5/100; }
+  startAnimEngine(2, true);
+}
+
+static void applyLedAnimSpinner(const char* colorHex, bool rainbow, uint32_t stepMs) {
+  stopLedAnim();
+  uint8_t br = 0, bg = 0, bb = 0;
+  if (!rainbow) parseHexColorRaw(colorHex, br, bg, bb);
+  const float tail[] = {1.0f, 0.7f, 0.4f, 0.15f, 0.03f};
+  for (int headPos = 0; headPos < LED_RING_COUNT; headPos++) {
+    AnimFrame& af = animFrames[headPos];
+    af.ms = stepMs; af.fade = true;
+    memset(af.r, 0, LED_RING_COUNT); memset(af.g, 0, LED_RING_COUNT); memset(af.b, 0, LED_RING_COUNT);
+    uint8_t hr = br, hg = bg, hb = bb;
+    if (rainbow) {
+      CRGB c = CHSV((uint8_t)((headPos * 256) / LED_RING_COUNT), 255, 255);
+      hr = c.r; hg = c.g; hb = c.b;
+    }
+    for (int t = 0; t < 5; t++) {
+      int pos = (headPos - t + LED_RING_COUNT) % LED_RING_COUNT;
+      af.r[pos] = (uint8_t)(hr * tail[t]);
+      af.g[pos] = (uint8_t)(hg * tail[t]);
+      af.b[pos] = (uint8_t)(hb * tail[t]);
+    }
+  }
+  startAnimEngine(LED_RING_COUNT, true);
+}
+
+static void applyLedAnimChoosing(JsonDocument& doc) {
+  stopLedAnim();
+  JsonArray colorsArr = doc["colors"].as<JsonArray>();
+  int numColors = min((int)colorsArr.size(), 8);
+  if (numColors == 0) return;
+  uint32_t activeMs = doc["activeMs"] | 600;
+  uint32_t fadeMs   = doc["fadeMs"]   | 100;
+  int ledsPerColor  = LED_RING_COUNT / numColors;
+  uint8_t cr[8], cg[8], cb[8];
+  for (int i = 0; i < numColors; i++)
+    parseHexColorRaw(colorsArr[i] | "#000000", cr[i], cg[i], cb[i]);
+  // 2 frames per colour: static hold, then fade to next
+  for (int active = 0; active < numColors; active++) {
+    auto fill = [&](AnimFrame& f, int brightIdx) {
+      for (int c = 0; c < numColors; c++) {
+        float br = (c == brightIdx) ? 1.0f : 0.5f;
+        for (int j = 0; j < ledsPerColor; j++) {
+          int pos = c * ledsPerColor + j;
+          if (pos >= LED_RING_COUNT) break;
+          f.r[pos] = (uint8_t)(cr[c] * br);
+          f.g[pos] = (uint8_t)(cg[c] * br);
+          f.b[pos] = (uint8_t)(cb[c] * br);
+        }
+      }
+    };
+    AnimFrame& sf = animFrames[active * 2];
+    sf.ms = activeMs; sf.fade = false;
+    fill(sf, active);
+    AnimFrame& ff = animFrames[active * 2 + 1];
+    ff.ms = fadeMs; ff.fade = true;
+    fill(ff, (active + 1) % numColors);
+  }
+  startAnimEngine(numColors * 2, true);
+}
+
+static void applyLedAnimUpkeep() {
+  stopLedAnim();
+  const uint8_t GR = 0xd4, GG = 0xa0, GB = 0x17; // gold
+  const uint8_t PR = 0xe6, PG = 0x4d, PB = 0xa0;  // pink
+  const uint8_t BR = 0xcc, BG = 0x77, BB = 0x00;  // brown
+  const int N = LED_RING_COUNT, T = N / 3;
+  int fi = 0;
+  auto setLed = [&](AnimFrame& f, int pos, uint8_t r, uint8_t g, uint8_t b) {
+    f.r[pos] = r; f.g[pos] = g; f.b[pos] = b;
+  };
+  auto clear = [&](AnimFrame& f) { memset(f.r,0,N); memset(f.g,0,N); memset(f.b,0,N); };
+  // Frame: all off
+  clear(animFrames[fi]); animFrames[fi].ms = 100; animFrames[fi].fade = false; fi++;
+  // Gold fill
+  for (int i = 1; i <= T; i++) {
+    clear(animFrames[fi]); animFrames[fi].ms = 100; animFrames[fi].fade = true;
+    for (int j = 0; j < i; j++) setLed(animFrames[fi], j, GR, GG, GB);
+    fi++;
+  }
+  // Hold gold 2s
+  clear(animFrames[fi]); animFrames[fi].ms = 2000; animFrames[fi].fade = false;
+  for (int j = 0; j < T; j++) setLed(animFrames[fi], j, GR, GG, GB);
+  fi++;
+  // Pink fill (keep gold)
+  for (int i = 1; i <= T; i++) {
+    clear(animFrames[fi]); animFrames[fi].ms = 100; animFrames[fi].fade = true;
+    for (int j = 0; j < T; j++) setLed(animFrames[fi], j, GR, GG, GB);
+    for (int j = 0; j < i; j++) setLed(animFrames[fi], T+j, PR, PG, PB);
+    fi++;
+  }
+  // Brown fill (keep gold + pink)
+  for (int i = 1; i <= T; i++) {
+    clear(animFrames[fi]); animFrames[fi].ms = 100; animFrames[fi].fade = true;
+    for (int j = 0; j < T; j++) { setLed(animFrames[fi], j, GR, GG, GB); setLed(animFrames[fi], T+j, PR, PG, PB); }
+    for (int j = 0; j < i; j++) setLed(animFrames[fi], T*2+j, BR, BG, BB);
+    fi++;
+  }
+  // Hold full 5s
+  clear(animFrames[fi]); animFrames[fi].ms = 5000; animFrames[fi].fade = false;
+  for (int j = 0; j < T; j++) { setLed(animFrames[fi], j, GR, GG, GB); setLed(animFrames[fi], T+j, PR, PG, PB); setLed(animFrames[fi], T*2+j, BR, BG, BB); }
+  fi++;
+  startAnimEngine(fi, true);
+}
+
+void handleLedPatternCommand(JsonDocument& doc) {
+  const char* t = doc["type"] | "";
+  if      (strcmp(t, "led_off")            == 0) applyLedOff();
+  else if (strcmp(t, "led_solid")          == 0) applyLedSolid(doc["color"] | "#000000");
+  else if (strcmp(t, "led_alternate")      == 0) applyLedAlternate(doc["color"] | "#000000");
+  else if (strcmp(t, "led_alternate_pair") == 0) applyLedAlternatePair(doc["a"] | "#000000", doc["b"] | "#000000");
+  else if (strcmp(t, "led_half")           == 0) applyLedHalf(doc["color"] | "#000000", doc["first"] | false);
+  else if (strcmp(t, "led_rainbow")        == 0) applyLedRainbow();
+  else if (strcmp(t, "led_thirds")         == 0) applyLedThirds(doc["c1"] | "#000000", doc["c2"] | "#000000", doc["c3"] | "#000000");
+  else if (strcmp(t, "led_sectors")        == 0) applyLedSectors(doc);
+  else if (strcmp(t, "led_anim_breathe")   == 0) applyLedAnimBreathe(doc["color"] | "#ffffff", doc["halfPeriodMs"] | 2000);
+  else if (strcmp(t, "led_anim_spinner")   == 0) applyLedAnimSpinner(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["stepMs"] | 50);
+  else if (strcmp(t, "led_anim_choosing")  == 0) applyLedAnimChoosing(doc);
+  else if (strcmp(t, "led_anim_upkeep")    == 0) applyLedAnimUpkeep();
+  else if (strcmp(t, "led_anim_stop")      == 0) stopLedAnim();
+  else if (strcmp(t, "led_anim")           == 0) handleLedAnim(doc);  // raw fallback
+  else if (strcmp(t, "led")                == 0) handleLedCommand(doc); // raw fallback
+}
+
 // ---- Debug logging ----
 
 void debugLog(const char* message) {
@@ -308,9 +545,7 @@ void debugLog(String message) {
 // ---- Send helpers ----
 
 void sendToHub(JsonDocument& doc) {
-  String out;
-  serializeJson(doc, out);
-  wsClient.sendTXT(out);
+  sendToHubEspNow(doc);
 }
 
 // ---- Button handling ----
@@ -398,12 +633,16 @@ void setup() {
     while (true) { delay(1000); }
   }
 
+  WiFi.setSleep(false); // disable modem sleep — prevents missed incoming packets
+
   Serial.println("WiFi connected!");
   myHwId = getHwId();
   Serial.printf("Hardware ID: %s\n", myHwId.c_str());
 
   delay(500);
   electHub();
+
+  if (isHub) showIpOnDisplay(WiFi.localIP().toString().c_str());
 }
 
 // ---- Loop ----
@@ -437,13 +676,10 @@ void loop() {
       ESP.restart();
     }
   } else {
+    // Client: no WebSocket loop — communication is via ESP-NOW
     if (otaComplete) {
-      wsClient.disconnect();
-      delay(200);
       ESP.restart();
     }
-
-    wsClient.loop();
 
     if (otaProgressQueue) {
       int percent;

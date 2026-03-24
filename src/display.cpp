@@ -80,6 +80,14 @@ void initDisplay() {
   oled.display();
 }
 
+void showIpOnDisplay(const char* ip) {
+  strncpy(dispName, "Herald Hub", sizeof(dispName) - 1);
+  dispName[sizeof(dispName) - 1] = '\0';
+  strncpy(dispStatus, ip, sizeof(dispStatus) - 1);
+  dispStatus[sizeof(dispStatus) - 1] = '\0';
+  renderDisplay();
+}
+
 void handleDisplayCommand(JsonDocument& doc) {
   const char* name   = doc["name"]   | "";
   const char* status = doc["status"] | "";
