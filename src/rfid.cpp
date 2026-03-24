@@ -8,6 +8,7 @@ MFRC522::MIFARE_Key rfidKey;
 void initRfid() {
   SPI.begin(RFID_SCK_PIN, RFID_MISO_PIN, RFID_MOSI_PIN, RFID_SS_PIN);
   rfid.PCD_Init();
+  rfid.PCD_SetAntennaGain(MFRC522::RxGain_max); // boost from default 33dB to 48dB
   Serial.println("RFID reader initialised");
 }
 
