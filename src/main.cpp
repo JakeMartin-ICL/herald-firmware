@@ -186,6 +186,7 @@ static int  animFrameIndex   = -1;  // -1 = not running
 static int  animLoops        = 0;   // -1=infinite, >0=plays remaining
 static uint32_t animFrameStart  = 0;
 static uint32_t animLastFadeMs  = 0;
+static uint32_t animFadeMs      = 0; // per-animation fade duration override; 0 = full frame duration
 static uint8_t  prevR[LED_RING_COUNT];
 static uint8_t  prevG[LED_RING_COUNT];
 static uint8_t  prevB[LED_RING_COUNT];
@@ -258,7 +259,7 @@ void handleLedAnim(JsonDocument& doc) {
 
   if (animFrameCount == 0) return;
 
-  // Initialise prev colours to black so first fade starts from off
+  animFadeMs = 0; // raw animations always fade for the full frame duration
   memset(prevR, 0, sizeof(prevR));
   memset(prevG, 0, sizeof(prevG));
   memset(prevB, 0, sizeof(prevB));
@@ -282,8 +283,11 @@ void tickLedAnim() {
   }
 
   if (frame.fade && (now - animLastFadeMs) >= ANIM_FADE_INTERVAL_MS) {
-    // Linear interpolation in sRGB, gamma applied at display
-    float t = (float)elapsed / (float)frame.ms;
+    // Linear interpolation in sRGB, gamma applied at display.
+    // animFadeMs shortens the fade-in so the LED snaps to target then holds.
+    uint32_t fd = (animFadeMs > 0 && animFadeMs < frame.ms) ? animFadeMs : frame.ms;
+    float t = (float)elapsed / (float)fd;
+    if (t > 1.0f) t = 1.0f;
     for (int i = 0; i < LED_RING_COUNT; i++) {
       uint8_t r = (uint8_t)(prevR[i] + t * ((float)frame.r[i] - prevR[i]));
       uint8_t g = (uint8_t)(prevG[i] + t * ((float)frame.g[i] - prevG[i]));
@@ -372,7 +376,8 @@ static void applyLedSectors(JsonDocument& doc) {
 
 // ---- Named animation helpers (build directly into animFrames[]) ----
 
-static void startAnimEngine(int frameCount, bool loop) {
+static void startAnimEngine(int frameCount, bool loop, uint32_t overrideFadeMs = 0) {
+  animFadeMs = overrideFadeMs;
   animFrameCount = frameCount;
   animLoops = loop ? -1 : 1;
   memset(prevR, 0, sizeof(prevR));
@@ -403,7 +408,7 @@ static void applyLedAnimBreathe(const char* colorHex, bool rainbow, uint32_t hal
   startAnimEngine(2, true);
 }
 
-static void applyLedAnimSpinner(const char* colorHex, bool rainbow, uint32_t stepMs) {
+static void applyLedAnimSpinner(const char* colorHex, bool rainbow, uint32_t stepMs, uint32_t fadeMs) {
   stopLedAnim();
   uint8_t br = 0, bg = 0, bb = 0;
   if (!rainbow) parseHexColorRaw(colorHex, br, bg, bb);
@@ -424,7 +429,7 @@ static void applyLedAnimSpinner(const char* colorHex, bool rainbow, uint32_t ste
       af.b[pos] = (uint8_t)(hb * tail[t]);
     }
   }
-  startAnimEngine(LED_RING_COUNT, true);
+  startAnimEngine(LED_RING_COUNT, true, fadeMs);
 }
 
 static void applyLedAnimChoosing(JsonDocument& doc) {
@@ -517,7 +522,7 @@ void handleLedPatternCommand(JsonDocument& doc) {
   else if (strcmp(t, "led_thirds")         == 0) applyLedThirds(doc["c1"] | "#000000", doc["c2"] | "#000000", doc["c3"] | "#000000");
   else if (strcmp(t, "led_sectors")        == 0) applyLedSectors(doc);
   else if (strcmp(t, "led_anim_breathe")   == 0) applyLedAnimBreathe(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["halfPeriodMs"] | 2000);
-  else if (strcmp(t, "led_anim_spinner")   == 0) applyLedAnimSpinner(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["stepMs"] | 50);
+  else if (strcmp(t, "led_anim_spinner")   == 0) applyLedAnimSpinner(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["stepMs"] | 50, doc["fadeMs"] | 0);
   else if (strcmp(t, "led_anim_choosing")  == 0) applyLedAnimChoosing(doc);
   else if (strcmp(t, "led_anim_upkeep")    == 0) applyLedAnimUpkeep();
   else if (strcmp(t, "led_anim_stop")      == 0) stopLedAnim();
