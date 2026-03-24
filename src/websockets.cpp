@@ -401,21 +401,11 @@ void electHub() {
 #elif defined(FORCE_CLIENT)
   becomeClient();
 #else
-  // Retry mDNS lookup a few times — mDNS multicast can be slow to propagate,
-  // especially on mobile hotspots. Without retries, two boxes may both elect
-  // themselves hub simultaneously.
   WiFiClient testClient;
-  bool found = false;
-  for (int attempt = 1; attempt <= 3 && !found; attempt++) {
-    Serial.printf("Trying to find hub (attempt %d/3)...\n", attempt);
-    if (testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT)) {
-      testClient.stop();
-      found = true;
-    } else if (attempt < 3) {
-      delay(1000);
-    }
-  }
+  Serial.println("Checking for existing hub...");
+  bool found = testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT);
   if (found) {
+    testClient.stop();
     Serial.println("Hub found!");
     becomeClient();
   } else {
