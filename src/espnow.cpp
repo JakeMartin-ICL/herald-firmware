@@ -90,7 +90,7 @@ void sendToAllBoxesEspNow(JsonDocument& doc) {
 
 // ---- Receive callback ----
 
-static void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+static void onEspNowRecv(const uint8_t* mac_addr, const uint8_t* data, int len) {
   if (len <= 0 || len > 250) return;
 
   String msg((const char*)data, len);
@@ -104,13 +104,13 @@ static void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, i
     if (strcmp(msgType, "hello") == 0) {
       const char* hwid    = doc["hwid"]    | "";
       const char* version = doc["version"] | "";
-      registerBoxPeer(info->src_addr, String(hwid));
+      registerBoxPeer(mac_addr, String(hwid));
 
       // Acknowledge so the client learns our MAC
       JsonDocument ack;
       ack["type"] = "hub_ack";
       ack["hwid"] = myHwId;
-      espNowSend(info->src_addr, ack);
+      espNowSend(mac_addr, ack);
 
       // Notify the web app
       JsonDocument notify;
@@ -123,7 +123,7 @@ static void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, i
     } else {
       // Add hwid from peer table if not already in message
       if (strlen(doc["hwid"] | "") == 0) {
-        String hwid = hwIdForMac(info->src_addr);
+        String hwid = hwIdForMac(mac_addr);
         if (hwid.length() > 0) doc["hwid"] = hwid;
       }
       forwardToApp(doc);
@@ -134,7 +134,7 @@ static void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, i
 
     if (strcmp(msgType, "hub_ack") == 0) {
       if (!hubMacKnown) {
-        memcpy(hubMac, info->src_addr, 6);
+        memcpy(hubMac, mac_addr, 6);
         hubMacKnown = true;
         addEspNowPeer(hubMac);
         debugLog("ESP-NOW: hub found, peer registered");

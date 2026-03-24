@@ -2,7 +2,6 @@
 
 // ---- Hub: client tracking ----
 
-const int MAX_CLIENTS = 10;
 String clientHwIds[MAX_CLIENTS];
 String clientVersions[MAX_CLIENTS];
 bool clientIsApp[MAX_CLIENTS];

@@ -60,6 +60,7 @@ const int WS_PORT = 8765;
 const char* const HUB_HOSTNAME = "herald";
 const int RECONNECT_INTERVAL_MS = 5000;
 const int MAX_CREDENTIALS = 10;
+const int MAX_CLIENTS = 10;
 
 // ---- Structs ----
 

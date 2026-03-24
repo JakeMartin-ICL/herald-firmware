@@ -458,9 +458,9 @@ static void applyLedAnimChoosing(JsonDocument& doc) {
 
 static void applyLedAnimUpkeep() {
   stopLedAnim();
-  const uint8_t GR = 0xd4, GG = 0xa0, GB = 0x17; // gold
-  const uint8_t PR = 0xe6, PG = 0x4d, PB = 0xa0;  // pink
-  const uint8_t BR = 0xcc, BG = 0x77, BB = 0x00;  // brown
+  const uint8_t GR = 0xd4, GG = 0xa0, GB = 0x17;   // gold
+  const uint8_t PR = 0xe6, PG = 0x4d, PB = 0xa0;   // pink
+  const uint8_t BRNR = 0xcc, BRNG = 0x77, BRNB = 0x00; // brown
   const int N = LED_RING_COUNT, T = N / 3;
   int fi = 0;
   auto setLed = [&](AnimFrame& f, int pos, uint8_t r, uint8_t g, uint8_t b) {
@@ -490,12 +490,12 @@ static void applyLedAnimUpkeep() {
   for (int i = 1; i <= T; i++) {
     clear(animFrames[fi]); animFrames[fi].ms = 100; animFrames[fi].fade = true;
     for (int j = 0; j < T; j++) { setLed(animFrames[fi], j, GR, GG, GB); setLed(animFrames[fi], T+j, PR, PG, PB); }
-    for (int j = 0; j < i; j++) setLed(animFrames[fi], T*2+j, BR, BG, BB);
+    for (int j = 0; j < i; j++) setLed(animFrames[fi], T*2+j, BRNR, BRNG, BRNB);
     fi++;
   }
   // Hold full 5s
   clear(animFrames[fi]); animFrames[fi].ms = 5000; animFrames[fi].fade = false;
-  for (int j = 0; j < T; j++) { setLed(animFrames[fi], j, GR, GG, GB); setLed(animFrames[fi], T+j, PR, PG, PB); setLed(animFrames[fi], T*2+j, BR, BG, BB); }
+  for (int j = 0; j < T; j++) { setLed(animFrames[fi], j, GR, GG, GB); setLed(animFrames[fi], T+j, PR, PG, PB); setLed(animFrames[fi], T*2+j, BRNR, BRNG, BRNB); }
   fi++;
   startAnimEngine(fi, true);
 }
