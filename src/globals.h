@@ -106,6 +106,7 @@ void stopLedAnim();
 void tickLedAnim();
 void initDisplay();
 void showIpOnDisplay(const char* ip);
+void showClientOnDisplay();
 void handleDisplayCommand(JsonDocument& doc);
 void saveCredentials();
 

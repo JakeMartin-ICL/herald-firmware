@@ -88,6 +88,14 @@ void showIpOnDisplay(const char* ip) {
   renderDisplay();
 }
 
+void showClientOnDisplay() {
+  strncpy(dispName, "Herald", sizeof(dispName) - 1);
+  dispName[sizeof(dispName) - 1] = '\0';
+  strncpy(dispStatus, "Client", sizeof(dispStatus) - 1);
+  dispStatus[sizeof(dispStatus) - 1] = '\0';
+  renderDisplay();
+}
+
 void handleDisplayCommand(JsonDocument& doc) {
   const char* name   = doc["name"]   | "";
   const char* status = doc["status"] | "";
