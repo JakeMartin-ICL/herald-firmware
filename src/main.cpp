@@ -559,6 +559,112 @@ void sendToHub(JsonDocument& doc) {
   sendToHubEspNow(doc);
 }
 
+// ---- On-device menu ----
+
+enum MenuLayer { MENU_NONE = 0, MENU_MAIN, MENU_WIFI };
+static MenuLayer menuLayer   = MENU_NONE;
+static int       menuCursor  = 0;
+static uint32_t  menuLastInput = 0;
+#define MENU_TIMEOUT_MS 10000
+
+static void renderMenu() {
+  // Build item list for the current layer
+  static char     itemBufs[12][24];
+  static const char* itemPtrs[12];
+  int count = 0;
+
+  if (menuLayer == MENU_MAIN) {
+    strncpy(itemBufs[count], "Exit", 23);         itemPtrs[count] = itemBufs[count]; count++;
+    strncpy(itemBufs[count], "Choose WiFi", 23);  itemPtrs[count] = itemBufs[count]; count++;
+  } else if (menuLayer == MENU_WIFI) {
+    strncpy(itemBufs[count], "Back", 23); itemPtrs[count] = itemBufs[count]; count++;
+    String currentSsid = WiFi.SSID();
+    for (int i = 0; i < credentialCount && count < 12; i++) {
+      bool isCurrent = (credentials[i].ssid == currentSsid);
+      snprintf(itemBufs[count], 24, "%s%s", isCurrent ? "*" : " ", credentials[i].ssid.c_str());
+      itemPtrs[count] = itemBufs[count];
+      count++;
+    }
+  }
+
+  if (menuCursor >= count) menuCursor = 0;
+  showMenuOnDisplay(itemPtrs, count, menuCursor);
+}
+
+static void closeMenu() {
+  menuLayer = MENU_NONE;
+  refreshDisplay();
+}
+
+static void openMenu() {
+  if (!isHub) return; // no menu entries for client boxes yet
+  menuLayer    = MENU_MAIN;
+  menuCursor   = 0;
+  menuLastInput = millis();
+  renderMenu();
+}
+
+static void switchWifi(int credIdx) {
+  if (credIdx < 0 || credIdx >= credentialCount) return;
+  menuLayer = MENU_NONE;
+
+  const char* ssid = credentials[credIdx].ssid.c_str();
+  showMessageOnDisplay("Connecting...", ssid);
+
+  WiFi.disconnect();
+  WiFi.begin(credentials[credIdx].ssid.c_str(), credentials[credIdx].password.c_str());
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setSleep(false);
+    MDNS.end();
+    if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
+    showIpOnDisplay(WiFi.localIP().toString().c_str());
+  } else {
+    showMessageOnDisplay("Connect failed", ssid);
+    delay(2000);
+    refreshDisplay();
+  }
+}
+
+static void menuEnter() {
+  menuLastInput = millis();
+  if (menuLayer == MENU_MAIN) {
+    if (menuCursor == 0) {
+      closeMenu();
+    } else if (menuCursor == 1) {
+      menuLayer  = MENU_WIFI;
+      menuCursor = 0;
+      renderMenu();
+    }
+  } else if (menuLayer == MENU_WIFI) {
+    if (menuCursor == 0) {
+      menuLayer  = MENU_MAIN;
+      menuCursor = 0;
+      renderMenu();
+    } else {
+      switchWifi(menuCursor - 1);
+    }
+  }
+}
+
+static void menuNext() {
+  menuLastInput = millis();
+  // Count items for current layer
+  int count = (menuLayer == MENU_MAIN) ? 2 : (1 + credentialCount);
+  menuCursor = (menuCursor + 1) % count;
+  renderMenu();
+}
+
+void tickMenu() {
+  if (menuLayer == MENU_NONE) return;
+  if (millis() - menuLastInput >= MENU_TIMEOUT_MS) closeMenu();
+}
+
 // ---- Button handling ----
 
 bool lastEndTurnState = HIGH;
@@ -567,6 +673,8 @@ bool longPressHandled = false;
 const unsigned long LONG_PRESS_MS = 2000;
 
 bool lastPassState = HIGH;
+static unsigned long passPressTime = 0;
+static bool passLongPressHandled = false;
 
 static void sendButtonEvent(const char* type) {
   setLed(true);
@@ -597,23 +705,51 @@ void handleButtons() {
   if (endTurnState == LOW && !longPressHandled) {
     if (millis() - endTurnPressTime >= LONG_PRESS_MS) {
       longPressHandled = true;
-      sendButtonEvent("longpress");
+      if (menuLayer != MENU_NONE) {
+        closeMenu(); // long press exits menu from anywhere
+      } else {
+        sendButtonEvent("longpress");
+      }
     }
   }
 
   if (endTurnState == HIGH && lastEndTurnState == LOW) {
     if (!longPressHandled) {
-      sendButtonEvent("endturn");
+      if (menuLayer != MENU_NONE) {
+        menuEnter();
+      } else {
+        sendButtonEvent("endturn");
+      }
     }
   }
 
   lastEndTurnState = endTurnState;
 
-  // Pass button — simple press only
+  // Pass button — simple press; long press opens menu
   bool passState = digitalRead(BUTTON_PASS);
-  if (passState == HIGH && lastPassState == LOW) {
-    sendButtonEvent("pass");
+
+  if (passState == LOW && lastPassState == HIGH) {
+    passPressTime        = millis();
+    passLongPressHandled = false;
   }
+
+  if (passState == LOW && !passLongPressHandled) {
+    if (millis() - passPressTime >= LONG_PRESS_MS) {
+      passLongPressHandled = true;
+      openMenu();
+    }
+  }
+
+  if (passState == HIGH && lastPassState == LOW) {
+    if (!passLongPressHandled) {
+      if (menuLayer != MENU_NONE) {
+        menuNext();
+      } else {
+        sendButtonEvent("pass");
+      }
+    }
+  }
+
   lastPassState = passState;
 }
 
@@ -705,6 +841,8 @@ void loop() {
   }
 
   tickLedAnim();
+  tickDisplay();
+  tickMenu();
   handleButtons();
 
   // Report battery voltage every 60 seconds

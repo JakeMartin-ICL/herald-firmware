@@ -107,7 +107,11 @@ void tickLedAnim();
 void initDisplay();
 void showIpOnDisplay(const char* ip);
 void showClientOnDisplay();
+void refreshDisplay();
+void tickDisplay();
 void handleDisplayCommand(JsonDocument& doc);
+void showMenuOnDisplay(const char** items, int count, int cursor);
+void showMessageOnDisplay(const char* line1, const char* line2 = nullptr);
 void saveCredentials();
 
 // websockets.cpp
