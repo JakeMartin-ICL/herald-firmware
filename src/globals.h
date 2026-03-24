@@ -58,6 +58,8 @@
 
 const int WS_PORT = 8765;
 const char* const HUB_HOSTNAME = "herald";
+const char* const HOTSPOT_SSID = "HeraldHub";
+const char* const HOTSPOT_PASS = "heraldbox";
 const int RECONNECT_INTERVAL_MS = 5000;
 const int MAX_CREDENTIALS = 10;
 const int MAX_CLIENTS = 10;
@@ -77,6 +79,7 @@ struct OtaArgs {
 // ---- Shared globals (defined in main.cpp) ----
 
 extern bool isHub;
+extern bool isHotspot;
 extern String myHwId;
 extern bool debugModeEnabled;
 extern bool otaInProgress;
@@ -107,6 +110,7 @@ void tickLedAnim();
 void initDisplay();
 void showIpOnDisplay(const char* ip);
 void showClientOnDisplay();
+void showHotspotOnDisplay();
 void refreshDisplay();
 void tickDisplay();
 void handleDisplayCommand(JsonDocument& doc);

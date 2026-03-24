@@ -4,6 +4,7 @@
 // ---- Shared global definitions ----
 
 bool isHub = false;
+bool isHotspot = false;
 String myHwId = "";
 bool debugModeEnabled = false;
 bool otaInProgress = false;
@@ -70,6 +71,34 @@ bool connectWifi() {
     Serial.println();
   }
   return false;
+}
+
+static bool connectToHotspot() {
+  Serial.printf("Scanning for herald hotspot (%s)...\n", HOTSPOT_SSID);
+  int n = WiFi.scanNetworks();
+  bool found = false;
+  for (int i = 0; i < n; i++) {
+    if (WiFi.SSID(i) == HOTSPOT_SSID) { found = true; break; }
+  }
+  WiFi.scanDelete();
+  if (!found) { Serial.println("Herald hotspot not found"); return false; }
+  Serial.println("Herald hotspot found — connecting...");
+  WiFi.begin(HOTSPOT_SSID, HOTSPOT_PASS);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
+
+static void activateHotspot() {
+  WiFi.softAP(HOTSPOT_SSID, HOTSPOT_PASS);
+  isHotspot = true;
+  Serial.printf("Herald hotspot started: %s\n", HOTSPOT_SSID);
+  showHotspotOnDisplay();
 }
 
 // ---- Hardware ID ----
@@ -576,6 +605,9 @@ static void renderMenu() {
   if (menuLayer == MENU_MAIN) {
     strncpy(itemBufs[count], "Exit", 23);         itemPtrs[count] = itemBufs[count]; count++;
     strncpy(itemBufs[count], "Choose WiFi", 23);  itemPtrs[count] = itemBufs[count]; count++;
+    if (isHub) {
+      strncpy(itemBufs[count], "Become Hotspot", 23); itemPtrs[count] = itemBufs[count]; count++;
+    }
   } else if (menuLayer == MENU_WIFI) {
     strncpy(itemBufs[count], "Back", 23); itemPtrs[count] = itemBufs[count]; count++;
     String currentSsid = WiFi.SSID();
@@ -585,6 +617,10 @@ static void renderMenu() {
       itemPtrs[count] = itemBufs[count];
       count++;
     }
+    // Append HeraldHub hotspot entry
+    bool onHotspot = isHotspot || (currentSsid == HOTSPOT_SSID);
+    snprintf(itemBufs[count], 24, "%s%s", onHotspot ? "*" : " ", HOTSPOT_SSID);
+    itemPtrs[count] = itemBufs[count]; count++;
   }
 
   if (menuCursor >= count) menuCursor = 0;
@@ -597,7 +633,6 @@ static void closeMenu() {
 }
 
 static void openMenu() {
-  if (!isHub) return; // no menu entries for client boxes yet
   menuLayer    = MENU_MAIN;
   menuCursor   = 0;
   menuLastInput = millis();
@@ -621,11 +656,45 @@ static void switchWifi(int credIdx) {
 
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.setSleep(false);
-    MDNS.end();
-    if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
-    showIpOnDisplay(WiFi.localIP().toString().c_str());
+    if (isHub) {
+      MDNS.end();
+      if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
+      showIpOnDisplay(WiFi.localIP().toString().c_str());
+    } else {
+      WiFi.disconnect(false); // stay on channel for ESP-NOW, drop association
+      refreshDisplay();
+    }
   } else {
     showMessageOnDisplay("Connect failed", ssid);
+    delay(2000);
+    refreshDisplay();
+  }
+}
+
+static void switchToHotspot() {
+  menuLayer = MENU_NONE;
+  if (isHub) {
+    activateHotspot();
+    MDNS.end();
+    if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
+    return;
+  }
+  // Client: connect briefly to align ESP-NOW channel, then drop association
+  showMessageOnDisplay("Connecting...", HOTSPOT_SSID);
+  WiFi.begin(HOTSPOT_SSID, HOTSPOT_PASS);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setSleep(false);
+    WiFi.disconnect(false);
+    showMessageOnDisplay("Switched to", HOTSPOT_SSID);
+    delay(1500);
+    refreshDisplay();
+  } else {
+    showMessageOnDisplay("Connect failed", HOTSPOT_SSID);
     delay(2000);
     refreshDisplay();
   }
@@ -640,14 +709,18 @@ static void menuEnter() {
       menuLayer  = MENU_WIFI;
       menuCursor = 0;
       renderMenu();
+    } else if (menuCursor == 2 && isHub) {
+      switchToHotspot(); // "Become Hotspot"
     }
   } else if (menuLayer == MENU_WIFI) {
     if (menuCursor == 0) {
       menuLayer  = MENU_MAIN;
       menuCursor = 0;
       renderMenu();
-    } else {
+    } else if (menuCursor - 1 < credentialCount) {
       switchWifi(menuCursor - 1);
+    } else {
+      switchToHotspot(); // HeraldHub entry at end of list
     }
   }
 }
@@ -655,7 +728,7 @@ static void menuEnter() {
 static void menuNext() {
   menuLastInput = millis();
   // Count items for current layer
-  int count = (menuLayer == MENU_MAIN) ? 2 : (1 + credentialCount);
+  int count = (menuLayer == MENU_MAIN) ? (isHub ? 3 : 2) : (2 + credentialCount);
   menuCursor = (menuCursor + 1) % count;
   renderMenu();
 }
@@ -776,20 +849,22 @@ void setup() {
   loadCredentials();
 
   if (!connectWifi()) {
-    Serial.println("Failed to connect to any WiFi network — halting");
-    while (true) { delay(1000); }
+    Serial.println("Saved networks failed — scanning for herald hotspot...");
+    if (!connectToHotspot()) {
+      Serial.println("No hotspot found — becoming hotspot hub");
+      activateHotspot();
+    }
   }
 
   WiFi.setSleep(false); // disable modem sleep — prevents missed incoming packets
 
-  Serial.println("WiFi connected!");
   myHwId = getHwId();
   Serial.printf("Hardware ID: %s\n", myHwId.c_str());
 
   delay(500);
   electHub();
 
-  if (isHub) showIpOnDisplay(WiFi.localIP().toString().c_str());
+  if (isHub && !isHotspot) showIpOnDisplay(WiFi.localIP().toString().c_str());
 }
 
 // ---- Loop ----
