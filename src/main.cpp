@@ -58,7 +58,7 @@ bool connectWifi() {
     Serial.printf("Trying WiFi: %s\n", credentials[i].ssid.c_str());
     WiFi.begin(credentials[i].ssid.c_str(), credentials[i].password.c_str());
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 3) {
       delay(500);
       Serial.print(".");
       attempts++;

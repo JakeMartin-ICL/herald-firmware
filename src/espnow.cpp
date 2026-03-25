@@ -75,6 +75,7 @@ void sendToBoxEspNow(const String& hwid, JsonDocument& doc) {
     }
   }
   Serial.printf("ESP-NOW: no peer found for hwid %s\n", hwid.c_str());
+  debugLog("ESP-NOW: no peer for " + hwid);
 }
 
 // Broadcast to all known box peers (hub only)
@@ -157,6 +158,7 @@ static void onEspNowRecv(const uint8_t* mac_addr, const uint8_t* data, int len) 
       performOtaUpdate(doc["url"] | "", doc["version"] | "");
     } else if (strcmp(msgType, "debug_on") == 0) {
       debugModeEnabled = true;
+      debugLog("Debug mode enabled");
     } else if (strcmp(msgType, "debug_off") == 0) {
       debugModeEnabled = false;
     } else if (strcmp(msgType, "rfid_enable") == 0) {

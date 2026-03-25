@@ -9,7 +9,15 @@ void initRfid() {
   SPI.begin(RFID_SCK_PIN, RFID_MISO_PIN, RFID_MOSI_PIN, RFID_SS_PIN);
   rfid.PCD_Init();
   rfid.PCD_SetAntennaGain(MFRC522::RxGain_max); // boost from default 33dB to 48dB
-  Serial.println("RFID reader initialised");
+
+  // Check SPI connectivity: firmware version register should be 0x91 or 0x92.
+  // 0x00 or 0xFF means SPI communication failed (loose wire, wrong pins, dead chip).
+  byte ver = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  if (ver == 0x00 || ver == 0xFF) {
+    Serial.printf("RFID: SPI communication failed (VersionReg=0x%02X) — check wiring\n", ver);
+  } else {
+    Serial.printf("RFID reader initialised (firmware v0x%02X, gain=max)\n", ver);
+  }
 }
 
 // Authenticate sector 0 with the default factory key (all 0xFF).
