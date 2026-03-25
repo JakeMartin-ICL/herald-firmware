@@ -156,8 +156,104 @@ void refreshDisplay() {
   renderDisplay();
 }
 
+// ---- RFID placement guide (animated) ----
+
+static bool     rfidPromptActive = false;
+static bool     rfidPromptFrame  = false; // false = sensor view, true = card view
+static uint32_t rfidPromptMs     = 0;
+static const uint32_t RFID_PROMPT_INTERVAL_MS = 2000;
+
+// Flat-top/bottom regular hexagon: vertices at 0°,60°,120°,180°,240°,300°
+static void drawHex(int cx, int cy, int r) {
+  // cos/sin values for the 6 vertex angles, multiplied by 512 (fixed-point)
+  static const int16_t COS6[6] = { 512,  256, -256, -512, -256,  256 };
+  static const int16_t SIN6[6] = {   0,  443,  443,    0, -443, -443 };
+  int vx[6], vy[6];
+  for (int i = 0; i < 6; i++) {
+    vx[i] = cx + (r * COS6[i] + 256) / 512;
+    vy[i] = cy + (r * SIN6[i] + 256) / 512;
+  }
+  for (int i = 0; i < 6; i++) {
+    oled.drawLine(vx[i], vy[i], vx[(i+1)%6], vy[(i+1)%6], SSD1306_WHITE);
+  }
+}
+
+static void renderRfidPrompt() {
+  if (!oledOk) return;
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+
+  // Box top-down: hex with flat top/bottom, LED ring, button
+  // Hex top flat edge: y≈9 (vertices at 240°/300°), bottom: y≈55
+  const int cx  = 34, cy  = 32;
+  const int hexR = 27, ringR = 15, btnR = 6;
+  // RFID sensor: above button, centred in the ring
+  const int rfx = cx, rfy = cy - 10;
+
+  drawHex(cx, cy, hexR);
+  oled.drawCircle(cx, cy, ringR, SSD1306_WHITE);
+  oled.fillCircle(cx, cy, btnR, SSD1306_WHITE);
+
+  if (!rfidPromptFrame) {
+    // Frame 1: sensor location shown as crosshair + circle
+    oled.drawCircle(rfx, rfy, 4, SSD1306_WHITE);
+    oled.drawFastHLine(rfx - 9, rfy, 5, SSD1306_WHITE); // left arm
+    oled.drawFastHLine(rfx + 5, rfy, 5, SSD1306_WHITE); // right arm
+    oled.drawFastVLine(rfx, rfy - 9, 5, SSD1306_WHITE); // top arm
+    oled.drawFastVLine(rfx, rfy + 5, 5, SSD1306_WHITE); // bottom arm
+  } else {
+    // Frame 2: card top-aligned to hex top edge, reaching near hex bottom
+    // Hex top flat edge spans x=21..48, y=9; bottom at y≈55
+    oled.fillRect(21, 9, 27, 43, SSD1306_BLACK);  // card covers diagram below
+    oled.drawRect(21, 9, 27, 43, SSD1306_WHITE);  // card outline
+
+    // Left-pointing arrow to the right of the hex top edge, at y=9
+    oled.drawFastHLine(50, 9, 14, SSD1306_WHITE); // shaft →
+    oled.drawLine(50, 9, 54, 7, SSD1306_WHITE);   // upper wing
+    oled.drawLine(50, 9, 54, 11, SSD1306_WHITE);  // lower wing
+  }
+
+  // Divider + right-side label
+  oled.drawFastVLine(68, 0, SCREEN_HEIGHT, SSD1306_WHITE);
+  oled.setTextSize(1);
+  if (!rfidPromptFrame) {
+    oled.setCursor(72, 12);  oled.print("Sensor");
+    oled.setCursor(72, 24);  oled.print("location");
+  } else {
+    oled.setCursor(72, 6);   oled.print("Align top");
+    oled.setCursor(72, 16);  oled.print("edge of");
+    oled.setCursor(72, 26);  oled.print("card with");
+    oled.setCursor(72, 36);  oled.print("top edge");
+    oled.setCursor(72, 46);  oled.print("of box");
+  }
+
+  oled.display();
+}
+
+void showRfidPromptOnDisplay() {
+  rfidPromptActive = true;
+  rfidPromptFrame  = false;
+  rfidPromptMs     = millis();
+  renderRfidPrompt();
+}
+
+void hideRfidPromptOnDisplay() {
+  rfidPromptActive = false;
+  renderDisplay();
+}
+
 void tickDisplay() {
-  if (!dispTimerRunning || !oledOk) return;
+  if (!oledOk) return;
+  if (rfidPromptActive) {
+    uint32_t now = millis();
+    if (now - rfidPromptMs >= RFID_PROMPT_INTERVAL_MS) {
+      rfidPromptMs    = now;
+      rfidPromptFrame = !rfidPromptFrame;
+      renderRfidPrompt();
+    }
+    return;
+  }
+  if (!dispTimerRunning) return;
   // Re-render once per second while timer is running
   static uint32_t lastSec = 0;
   uint32_t nowSec = dispTimerSecs + (millis() - dispTimerSyncMs) / 1000;

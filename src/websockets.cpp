@@ -169,6 +169,9 @@ static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
   } else if (strcmp(msgType, "rfid_disable") == 0) {
     debugLog("RFID disabled");
     rfidEnabled = false;
+  } else if (strcmp(msgType, "rfid_prompt") == 0) {
+    if (doc["show"] | false) showRfidPromptOnDisplay();
+    else hideRfidPromptOnDisplay();
   } else if (strcmp(msgType, "rfid_write") == 0) {
     debugLog("RFID write: " + String(doc["internalId"] | ""));
     handleRfidWrite(doc["internalId"] | "");
@@ -344,6 +347,9 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
       } else if (strcmp(msgType, "rfid_disable") == 0) {
         rfidEnabled = false;
         debugLog("RFID disabled");
+      } else if (strcmp(msgType, "rfid_prompt") == 0) {
+        if (doc["show"] | false) showRfidPromptOnDisplay();
+        else hideRfidPromptOnDisplay();
       } else if (strcmp(msgType, "wifi_credentials_set") == 0) {
         JsonArray arr = doc["credentials"].as<JsonArray>();
         credentialCount = 0;

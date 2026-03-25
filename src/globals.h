@@ -116,6 +116,8 @@ void tickDisplay();
 void handleDisplayCommand(JsonDocument& doc);
 void showMenuOnDisplay(const char** items, int count, int cursor);
 void showMessageOnDisplay(const char* line1, const char* line2 = nullptr);
+void showRfidPromptOnDisplay();
+void hideRfidPromptOnDisplay();
 void saveCredentials();
 
 // websockets.cpp

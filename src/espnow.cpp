@@ -165,6 +165,9 @@ static void onEspNowRecv(const uint8_t* mac_addr, const uint8_t* data, int len) 
       rfidEnabled = true;
     } else if (strcmp(msgType, "rfid_disable") == 0) {
       rfidEnabled = false;
+    } else if (strcmp(msgType, "rfid_prompt") == 0) {
+      if (doc["show"] | false) showRfidPromptOnDisplay();
+      else hideRfidPromptOnDisplay();
     } else if (strcmp(msgType, "rfid_write") == 0) {
       handleRfidWrite(doc["internalId"] | "");
     } else if (strcmp(msgType, "assigned") == 0) {
