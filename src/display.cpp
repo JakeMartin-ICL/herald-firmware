@@ -29,6 +29,20 @@ static bool     dispShowTimer    = false;
 static bool     dispShowCountdown   = false;
 static uint32_t dispCountdownEndMs  = 0;
 
+// ---- Pending display cache (used when menu is open) ----
+
+struct PendingDisplay {
+  char     name[48];
+  char     status[32];
+  bool     showRound;
+  int      round;
+  bool     showTimer;
+  bool     timerRunning;
+  uint32_t timerSecs;
+  bool     pending;
+};
+static PendingDisplay pendingDisplay = {};
+
 // ---- Helpers ----
 
 // Draw text centred horizontally at the given y; left-aligns if wider than screen.
@@ -274,6 +288,7 @@ void hideRfidPromptOnDisplay() {
 
 void tickDisplay() {
   if (!oledOk) return;
+  if (isMenuOpen()) return;
   if (rfidPromptActive) {
     uint32_t now = millis();
     if (now - rfidPromptMs >= RFID_PROMPT_INTERVAL_MS) {
@@ -303,16 +318,14 @@ void tickDisplay() {
   }
 }
 
-void handleDisplayCommand(JsonDocument& doc) {
+static void applyDisplayDoc(JsonDocument& doc) {
   const char* name   = doc["name"]   | "";
   const char* status = doc["status"] | "";
-  Serial.printf("Display: '%s' / '%s'\n", name, status);
   strncpy(dispName,   name,   sizeof(dispName)   - 1);
   dispName[sizeof(dispName) - 1] = '\0';
   strncpy(dispStatus, status, sizeof(dispStatus) - 1);
   dispStatus[sizeof(dispStatus) - 1] = '\0';
 
-  // Round
   if (doc["round"].is<int>()) {
     dispShowRound = true;
     dispRound = doc["round"].as<int>();
@@ -320,7 +333,6 @@ void handleDisplayCommand(JsonDocument& doc) {
     dispShowRound = false;
   }
 
-  // Timer
   if (doc["timerRunning"].is<bool>()) {
     dispShowTimer    = true;
     bool newRunning  = doc["timerRunning"].as<bool>();
@@ -332,7 +344,45 @@ void handleDisplayCommand(JsonDocument& doc) {
     dispShowTimer    = false;
     dispTimerRunning = false;
   }
+}
 
+void applyPendingDisplay() {
+  if (!pendingDisplay.pending) return;
+  pendingDisplay.pending = false;
+  strncpy(dispName,   pendingDisplay.name,   sizeof(dispName)   - 1);
+  dispName[sizeof(dispName) - 1] = '\0';
+  strncpy(dispStatus, pendingDisplay.status, sizeof(dispStatus) - 1);
+  dispStatus[sizeof(dispStatus) - 1] = '\0';
+  dispShowRound    = pendingDisplay.showRound;
+  dispRound        = pendingDisplay.round;
+  dispShowTimer    = pendingDisplay.showTimer;
+  dispTimerRunning = pendingDisplay.timerRunning;
+  dispTimerSecs    = pendingDisplay.timerSecs;
+  dispTimerSyncMs  = millis();
+  renderDisplay();
+}
+
+void handleDisplayCommand(JsonDocument& doc) {
+  const char* name   = doc["name"]   | "";
+  const char* status = doc["status"] | "";
+  Serial.printf("Display: '%s' / '%s'\n", name, status);
+
+  if (isMenuOpen()) {
+    // Cache the update; apply it when the menu closes
+    strncpy(pendingDisplay.name,   name,   sizeof(pendingDisplay.name)   - 1);
+    pendingDisplay.name[sizeof(pendingDisplay.name) - 1] = '\0';
+    strncpy(pendingDisplay.status, status, sizeof(pendingDisplay.status) - 1);
+    pendingDisplay.status[sizeof(pendingDisplay.status) - 1] = '\0';
+    pendingDisplay.showRound    = doc["round"].is<int>();
+    pendingDisplay.round        = doc["round"] | 0;
+    pendingDisplay.showTimer    = doc["timerRunning"].is<bool>();
+    pendingDisplay.timerRunning = doc["timerRunning"] | false;
+    pendingDisplay.timerSecs    = doc["timerSecs"] | 0;
+    pendingDisplay.pending      = true;
+    return;
+  }
+
+  applyDisplayDoc(doc);
   renderDisplay();
 }
 

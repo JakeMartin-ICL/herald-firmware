@@ -53,6 +53,23 @@ void loadCredentials() {
 #endif
 }
 
+static uint8_t ledBrightness = 255;     // persisted; 100% by default
+static bool pendingBrightnessNotify = false; // set true to send box_brightness from the main loop
+
+static void saveLedBrightness() {
+  Preferences prefs;
+  prefs.begin("herald", false);
+  prefs.putUChar("brightness", ledBrightness);
+  prefs.end();
+}
+
+static void loadLedBrightness() {
+  Preferences prefs;
+  prefs.begin("herald", true);
+  ledBrightness = prefs.getUChar("brightness", 255);
+  prefs.end();
+}
+
 bool connectWifi() {
   for (int i = 0; i < credentialCount; i++) {
     Serial.printf("Trying WiFi: %s\n", credentials[i].ssid.c_str());
@@ -183,6 +200,7 @@ static CRGB parseHexColor(const char* hex) {
 
 void initLedRing() {
   FastLED.addLeds<WS2812B, LED_RING_PIN, GRB>(ledRing, LED_RING_COUNT);
+  FastLED.setBrightness(ledBrightness);
   FastLED.clear(true);
 }
 
@@ -631,6 +649,16 @@ void handleLedPatternCommand(JsonDocument& doc) {
   else if (strcmp(t, "led_anim_stop")      == 0) stopLedAnim();
   else if (strcmp(t, "led_anim")           == 0) handleLedAnim(doc);  // raw fallback
   else if (strcmp(t, "led")                == 0) handleLedCommand(doc); // raw fallback
+  else if (strcmp(t, "led_brightness")     == 0) {
+    int val = doc["value"] | 255;
+    if (val < 1)   val = 1;
+    if (val > 255) val = 255;
+    ledBrightness = (uint8_t)val;
+    FastLED.setBrightness(ledBrightness);
+    FastLED.show();
+    saveLedBrightness();
+    pendingBrightnessNotify = true;
+  }
 }
 
 // ---- Debug logging ----
@@ -664,6 +692,28 @@ void sendToHub(JsonDocument& doc) {
 
 // ---- On-device menu ----
 
+static const uint8_t BRIGHT_STEPS[]  = { 1, 19, 67, 144, 255 };
+static const char*   BRIGHT_LABELS[] = { "- 1%", "-- 7%", "--- 26%", "---- 56%", "----- 100%" };
+
+// Return the index (0–4) of the current brightness step.
+static int brightnessStepIndex() {
+  for (int i = 0; i < 4; i++) {
+    if (ledBrightness <= BRIGHT_STEPS[i]) return i;
+  }
+  return 4;
+}
+
+static void cycleBrightness() {
+  int next = (brightnessStepIndex() + 1) % 5;
+  ledBrightness = BRIGHT_STEPS[next];
+  FastLED.setBrightness(ledBrightness);
+  FastLED.show();
+  saveLedBrightness();
+  // Defer WebSocket notification to the main loop — sending from within the
+  // button handler can trigger a re-entrant WebSocket callback that closes the menu.
+  pendingBrightnessNotify = true;
+}
+
 enum MenuLayer { MENU_NONE = 0, MENU_MAIN, MENU_WIFI };
 static MenuLayer menuLayer   = MENU_NONE;
 static int       menuCursor  = 0;
@@ -682,6 +732,8 @@ static void renderMenu() {
     if (isHub) {
       strncpy(itemBufs[count], "Become Hotspot", 23); itemPtrs[count] = itemBufs[count]; count++;
     }
+    snprintf(itemBufs[count], 24, "Bright: %s", BRIGHT_LABELS[brightnessStepIndex()]);
+    itemPtrs[count] = itemBufs[count]; count++;
   } else if (menuLayer == MENU_WIFI) {
     strncpy(itemBufs[count], "Back", 23); itemPtrs[count] = itemBufs[count]; count++;
     String currentSsid = WiFi.SSID();
@@ -701,8 +753,11 @@ static void renderMenu() {
   showMenuOnDisplay(itemPtrs, count, menuCursor);
 }
 
+bool isMenuOpen() { return menuLayer != MENU_NONE; }
+
 static void closeMenu() {
   menuLayer = MENU_NONE;
+  applyPendingDisplay();
   refreshDisplay();
 }
 
@@ -777,6 +832,7 @@ static void switchToHotspot() {
 static void menuEnter() {
   menuLastInput = millis();
   if (menuLayer == MENU_MAIN) {
+    int brightCursor = isHub ? 3 : 2;
     if (menuCursor == 0) {
       closeMenu();
     } else if (menuCursor == 1) {
@@ -785,6 +841,9 @@ static void menuEnter() {
       renderMenu();
     } else if (menuCursor == 2 && isHub) {
       switchToHotspot(); // "Become Hotspot"
+    } else if (menuCursor == brightCursor) {
+      cycleBrightness(); // cycles brightness and stays on this item
+      renderMenu();
     }
   } else if (menuLayer == MENU_WIFI) {
     if (menuCursor == 0) {
@@ -801,8 +860,8 @@ static void menuEnter() {
 
 static void menuNext() {
   menuLastInput = millis();
-  // Count items for current layer
-  int count = (menuLayer == MENU_MAIN) ? (isHub ? 3 : 2) : (2 + credentialCount);
+  // Count items for current layer (MENU_MAIN: Exit + Choose WiFi + Brightness + optional Hotspot)
+  int count = (menuLayer == MENU_MAIN) ? (isHub ? 4 : 3) : (2 + credentialCount);
   menuCursor = (menuCursor + 1) % count;
   renderMenu();
 }
@@ -909,6 +968,7 @@ void setup() {
   pinMode(BUTTON_PASS, INPUT_PULLUP);
   analogSetPinAttenuation(VBAT_PIN, ADC_11db);
   initDisplay();
+  loadLedBrightness();
   initLedRing();
 
   Serial.println("Herald booting...");
@@ -997,6 +1057,16 @@ void loop() {
 
   // Report battery voltage every 60 seconds
   static unsigned long lastBatteryMs = 0;
+  if (pendingBrightnessNotify) {
+    pendingBrightnessNotify = false;
+    JsonDocument brightDoc;
+    brightDoc["type"] = "box_brightness";
+    brightDoc["hwid"] = myHwId;
+    brightDoc["value"] = (int)ledBrightness; // 1–255
+    if (isHub) forwardToApp(brightDoc);
+    else sendToHub(brightDoc);
+  }
+
   if (millis() - lastBatteryMs >= 30000UL) {
     lastBatteryMs = millis();
     JsonDocument battDoc;
