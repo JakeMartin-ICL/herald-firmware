@@ -118,6 +118,9 @@ void initDisplay() {
   oledOk = oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR, false, false);
   if (!oledOk) {
     Serial.println("OLED init failed — check wiring and I2C address");
+    // Release the I2C peripheral so floating SDA/SCL lines don't generate
+    // spurious interrupts that interfere with WiFi packet processing.
+    Wire.end();
     return;
   }
 
