@@ -57,8 +57,12 @@ static bool rfidReadContent(String& out) {
 }
 
 // Write a null-terminated string into blocks 1–2 of sector 0 (max 31 chars).
-static bool rfidWriteContent(const char* content) {
-  if (!rfidAuth()) return false;
+// Returns true on success; sets errOut and returns false on failure.
+static bool rfidWriteContent(const char* content, String& errOut) {
+  if (!rfidAuth()) {
+    errOut = "Auth failed — tag may need replacing";
+    return false;
+  }
 
   byte block1[16] = {};
   byte block2[16] = {};
@@ -73,11 +77,13 @@ static bool rfidWriteContent(const char* content) {
   if (rfid.MIFARE_Write(1, block1, 16) != MFRC522::STATUS_OK) {
     Serial.println("RFID: write block 1 failed");
     rfid.PCD_StopCrypto1();
+    errOut = "Write failed (block 1)";
     return false;
   }
   if (rfid.MIFARE_Write(2, block2, 16) != MFRC522::STATUS_OK) {
     Serial.println("RFID: write block 2 failed");
     rfid.PCD_StopCrypto1();
+    errOut = "Write failed (block 2)";
     return false;
   }
   rfid.PCD_StopCrypto1();
@@ -95,6 +101,19 @@ void loopRfid() {
   rfid.PCD_StopCrypto1();
 
   if (!ok) return;
+
+  // Sanitise: non-ASCII bytes in a WebSocket text frame cause the browser to close
+  // the connection. Replace any such bytes so the message is always valid UTF-8.
+  bool hadBadBytes = false;
+  for (size_t i = 0; i < content.length(); i++) {
+    if ((uint8_t)content[i] < 0x20 || (uint8_t)content[i] > 0x7E) {
+      content[i] = '?';
+      hadBadBytes = true;
+    }
+  }
+  if (hadBadBytes) {
+    Serial.printf("RFID: corrupted tag (non-ASCII bytes), sanitised: %s\n", content.c_str());
+  }
 
   if (content.length() > 0 && content.indexOf(':') < 0) {
     Serial.printf("RFID: unrecognised format: %s\n", content.c_str());
@@ -134,11 +153,12 @@ void handleRfidWrite(const char* internalId) {
     return;
   }
 
-  bool ok = rfidWriteContent(internalId);
+  String writeErr;
+  bool ok = rfidWriteContent(internalId, writeErr);
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 
   resp["success"] = ok;
-  if (!ok) resp["error"] = "Write failed";
+  if (!ok) resp["error"] = writeErr;
   forwardToApp(resp);
 }
