@@ -540,6 +540,80 @@ static void applyLedAnimUpkeep() {
   startAnimEngine(fi, true);
 }
 
+// ---- Countdown LED ----
+
+static bool     countdownLedActive  = false;
+static bool     countdownLedRainbow = false;
+static uint32_t countdownLedStartMs = 0;
+static uint32_t countdownLedDurMs   = 0;
+static uint8_t  countdownLedR       = 255;
+static uint8_t  countdownLedG       = 255;
+static uint8_t  countdownLedB       = 255;
+static uint32_t countdownLedTickMs  = 0;
+
+void startCountdownLed(uint32_t durationMs, const char* colorHex, bool rainbow) {
+  stopLedAnim();
+  countdownLedRainbow = rainbow;
+  parseHexColorRaw(colorHex, countdownLedR, countdownLedG, countdownLedB);
+  countdownLedDurMs   = durationMs;
+  countdownLedStartMs = millis();
+  countdownLedActive  = true;
+  countdownLedTickMs  = 0;
+  // Show initial state: all LEDs fully on
+  for (int i = 0; i < LED_RING_COUNT; i++) {
+    if (countdownLedRainbow) {
+      uint8_t hue = (uint8_t)((i * 256) / LED_RING_COUNT);
+      ledRing[i].setHSV(hue, 255, 255);
+    } else {
+      ledRing[i] = CRGB(GAMMA8[countdownLedR], GAMMA8[countdownLedG], GAMMA8[countdownLedB]);
+    }
+  }
+  FastLED.show();
+}
+
+void stopCountdownLed() {
+  if (!countdownLedActive) return;
+  countdownLedActive = false;
+  applyLedOff();
+}
+
+void tickCountdownLed() {
+  if (!countdownLedActive) return;
+  uint32_t now = millis();
+  if (now - countdownLedTickMs < 33) return; // ~30fps
+  countdownLedTickMs = now;
+
+  uint32_t elapsed = now - countdownLedStartMs;
+  if (elapsed >= countdownLedDurMs) {
+    countdownLedActive = false;
+    // All LEDs red on expiry
+    fill_solid(ledRing, LED_RING_COUNT, CRGB(GAMMA8[200], 0, 0));
+    FastLED.show();
+    return;
+  }
+
+  uint32_t slotMs = (countdownLedDurMs + LED_RING_COUNT - 1) / LED_RING_COUNT;
+  for (int i = 0; i < LED_RING_COUNT; i++) {
+    uint32_t fadeStart = (uint32_t)i * slotMs;
+    uint32_t fadeEnd   = fadeStart + slotMs;
+    float brightness;
+    if (elapsed <= fadeStart)       brightness = 1.0f;
+    else if (elapsed >= fadeEnd)    brightness = 0.0f;
+    else                            brightness = 1.0f - (float)(elapsed - fadeStart) / (float)slotMs;
+    if (countdownLedRainbow) {
+      uint8_t hue = (uint8_t)((i * 256) / LED_RING_COUNT);
+      uint8_t val = (uint8_t)(brightness * 255);
+      ledRing[i].setHSV(hue, 255, val);
+    } else {
+      uint8_t r = (uint8_t)(countdownLedR * brightness);
+      uint8_t g = (uint8_t)(countdownLedG * brightness);
+      uint8_t b = (uint8_t)(countdownLedB * brightness);
+      ledRing[i] = CRGB(GAMMA8[r], GAMMA8[g], GAMMA8[b]);
+    }
+  }
+  FastLED.show();
+}
+
 void handleLedPatternCommand(JsonDocument& doc) {
   const char* t = doc["type"] | "";
   if      (strcmp(t, "led_off")            == 0) applyLedOff();
@@ -916,6 +990,7 @@ void loop() {
   }
 
   tickLedAnim();
+  tickCountdownLed();
   tickDisplay();
   tickMenu();
   handleButtons();

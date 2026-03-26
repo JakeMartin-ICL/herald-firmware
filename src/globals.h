@@ -118,6 +118,11 @@ void showMenuOnDisplay(const char** items, int count, int cursor);
 void showMessageOnDisplay(const char* line1, const char* line2 = nullptr);
 void showRfidPromptOnDisplay();
 void hideRfidPromptOnDisplay();
+void startCountdownOnDisplay(uint32_t durationMs);
+void stopCountdownOnDisplay();
+void startCountdownLed(uint32_t durationMs, const char* colorHex, bool rainbow = false);
+void stopCountdownLed();
+void tickCountdownLed();
 void saveCredentials();
 
 // websockets.cpp

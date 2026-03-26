@@ -168,6 +168,15 @@ static void onEspNowRecv(const uint8_t* mac_addr, const uint8_t* data, int len) 
     } else if (strcmp(msgType, "rfid_prompt") == 0) {
       if (doc["show"] | false) showRfidPromptOnDisplay();
       else hideRfidPromptOnDisplay();
+    } else if (strcmp(msgType, "countdown") == 0) {
+      uint32_t ms = doc["durationMs"] | 0u;
+      if (ms > 0) {
+        startCountdownOnDisplay(ms);
+        startCountdownLed(ms, doc["color"] | "#ffffff", doc["rainbow"] | false);
+      } else {
+        stopCountdownOnDisplay();
+        stopCountdownLed();
+      }
     } else if (strcmp(msgType, "rfid_write") == 0) {
       handleRfidWrite(doc["internalId"] | "");
     } else if (strcmp(msgType, "assigned") == 0) {

@@ -25,6 +25,10 @@ static bool     dispTimerRunning = false;
 static uint32_t dispTimerSyncMs  = 0;
 static bool     dispShowTimer    = false;
 
+// Countdown: counts down to dispCountdownEndMs
+static bool     dispShowCountdown   = false;
+static uint32_t dispCountdownEndMs  = 0;
+
 // ---- Helpers ----
 
 // Draw text centred horizontally at the given y; left-aligns if wider than screen.
@@ -49,7 +53,8 @@ static void renderDisplay() {
   // Determine which rows to show below the separator
   bool hasStatus = dispStatus[0] != '\0';
   bool showTimer = dispShowTimer && dispTimerRunning;
-  int bottomRows = (hasStatus ? 1 : 0) + (dispShowRound ? 1 : 0) + (showTimer ? 1 : 0);
+  bool showCountdown = dispShowCountdown && (millis() < dispCountdownEndMs);
+  int bottomRows = (hasStatus ? 1 : 0) + (dispShowRound ? 1 : 0) + (showTimer ? 1 : 0) + (showCountdown ? 1 : 0);
 
   if (bottomRows == 0) {
     // Name centred vertically over the full screen (no extras)
@@ -89,6 +94,16 @@ static void renderDisplay() {
       uint32_t h = total / 3600, m = (total % 3600) / 60, s = total % 60;
       if (h > 0) snprintf(buf, sizeof(buf), "%u:%02u:%02u", h, m, s);
       else        snprintf(buf, sizeof(buf), "%u:%02u", m, s);
+      drawCentered(buf, rowY, 1);
+      rowY += ROW_H;
+    }
+    if (showCountdown) {
+      uint32_t nowMs = millis();
+      uint32_t remaining = (dispCountdownEndMs > nowMs) ? (dispCountdownEndMs - nowMs + 999) / 1000 : 0;
+      char buf[12];
+      uint32_t m = remaining / 60, s = remaining % 60;
+      if (m > 0) snprintf(buf, sizeof(buf), "-%u:%02u", m, s);
+      else        snprintf(buf, sizeof(buf), "-%us", (unsigned)remaining);
       drawCentered(buf, rowY, 1);
     }
   }
@@ -156,6 +171,18 @@ void showHotspotOnDisplay() {
 }
 
 void refreshDisplay() {
+  renderDisplay();
+}
+
+void startCountdownOnDisplay(uint32_t durationMs) {
+  dispShowCountdown  = true;
+  dispCountdownEndMs = millis() + durationMs;
+  renderDisplay();
+}
+
+void stopCountdownOnDisplay() {
+  if (!dispShowCountdown) return;
+  dispShowCountdown = false;
   renderDisplay();
 }
 
@@ -256,10 +283,20 @@ void tickDisplay() {
     }
     return;
   }
-  if (!dispTimerRunning) return;
-  // Re-render once per second while timer is running
+
+  // Detect countdown expiry — clear flag and do a final render
+  if (dispShowCountdown && millis() >= dispCountdownEndMs) {
+    dispShowCountdown = false;
+    renderDisplay();
+    // fall through: timer may still need ticking
+  }
+
+  bool needsTick = dispTimerRunning || dispShowCountdown;
+  if (!needsTick) return;
+
+  // Re-render once per second while timer or countdown is running
   static uint32_t lastSec = 0;
-  uint32_t nowSec = dispTimerSecs + (millis() - dispTimerSyncMs) / 1000;
+  uint32_t nowSec = millis() / 1000;
   if (nowSec != lastSec) {
     lastSec = nowSec;
     renderDisplay();
