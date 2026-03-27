@@ -29,11 +29,15 @@ static bool     dispShowTimer    = false;
 static bool     dispShowCountdown   = false;
 static uint32_t dispCountdownEndMs  = 0;
 
+// Message (max 21 chars — one line at text size 1)
+static char dispMessage[22] = "";
+
 // ---- Pending display cache (used when menu is open) ----
 
 struct PendingDisplay {
   char     name[48];
   char     status[32];
+  char     message[22];
   bool     showRound;
   int      round;
   bool     showTimer;
@@ -66,9 +70,10 @@ static void renderDisplay() {
 
   // Determine which rows to show below the separator
   bool hasStatus = dispStatus[0] != '\0';
+  bool hasMessage = dispMessage[0] != '\0';
   bool showTimer = dispShowTimer && dispTimerRunning;
   bool showCountdown = dispShowCountdown && (millis() < dispCountdownEndMs);
-  int bottomRows = (hasStatus ? 1 : 0) + (dispShowRound ? 1 : 0) + (showTimer ? 1 : 0) + (showCountdown ? 1 : 0);
+  int bottomRows = (hasStatus ? 1 : 0) + (dispShowRound ? 1 : 0) + (showTimer ? 1 : 0) + (showCountdown ? 1 : 0) + (hasMessage ? 1 : 0);
 
   if (bottomRows == 0) {
     // Name centred vertically over the full screen (no extras)
@@ -119,6 +124,10 @@ static void renderDisplay() {
       if (m > 0) snprintf(buf, sizeof(buf), "-%u:%02u", m, s);
       else        snprintf(buf, sizeof(buf), "-%us", (unsigned)remaining);
       drawCentered(buf, rowY, 1);
+      rowY += ROW_H;
+    }
+    if (hasMessage) {
+      drawCentered(dispMessage, rowY, 1);
     }
   }
 
@@ -344,15 +353,21 @@ static void applyDisplayDoc(JsonDocument& doc) {
     dispShowTimer    = false;
     dispTimerRunning = false;
   }
+
+  const char* message = doc["message"] | "";
+  strncpy(dispMessage, message, sizeof(dispMessage) - 1);
+  dispMessage[sizeof(dispMessage) - 1] = '\0';
 }
 
 void applyPendingDisplay() {
   if (!pendingDisplay.pending) return;
   pendingDisplay.pending = false;
-  strncpy(dispName,   pendingDisplay.name,   sizeof(dispName)   - 1);
+  strncpy(dispName,    pendingDisplay.name,    sizeof(dispName)    - 1);
   dispName[sizeof(dispName) - 1] = '\0';
-  strncpy(dispStatus, pendingDisplay.status, sizeof(dispStatus) - 1);
+  strncpy(dispStatus,  pendingDisplay.status,  sizeof(dispStatus)  - 1);
   dispStatus[sizeof(dispStatus) - 1] = '\0';
+  strncpy(dispMessage, pendingDisplay.message, sizeof(dispMessage) - 1);
+  dispMessage[sizeof(dispMessage) - 1] = '\0';
   dispShowRound    = pendingDisplay.showRound;
   dispRound        = pendingDisplay.round;
   dispShowTimer    = pendingDisplay.showTimer;
@@ -373,6 +388,9 @@ void handleDisplayCommand(JsonDocument& doc) {
     pendingDisplay.name[sizeof(pendingDisplay.name) - 1] = '\0';
     strncpy(pendingDisplay.status, status, sizeof(pendingDisplay.status) - 1);
     pendingDisplay.status[sizeof(pendingDisplay.status) - 1] = '\0';
+    const char* message = doc["message"] | "";
+    strncpy(pendingDisplay.message, message, sizeof(pendingDisplay.message) - 1);
+    pendingDisplay.message[sizeof(pendingDisplay.message) - 1] = '\0';
     pendingDisplay.showRound    = doc["round"].is<int>();
     pendingDisplay.round        = doc["round"] | 0;
     pendingDisplay.showTimer    = doc["timerRunning"].is<bool>();
