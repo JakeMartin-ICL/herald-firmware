@@ -113,6 +113,7 @@ void showIpOnDisplay(const char* ip);
 void showClientOnDisplay();
 void showHotspotOnDisplay();
 void refreshDisplay();
+void setDisplayBatteryVoltage(float v);
 void tickDisplay();
 void handleDisplayCommand(JsonDocument& doc);
 void showMenuOnDisplay(const char** items, int count, int cursor);

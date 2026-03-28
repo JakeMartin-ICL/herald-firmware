@@ -1069,10 +1069,12 @@ void loop() {
 
   if (millis() - lastBatteryMs >= 30000UL) {
     lastBatteryMs = millis();
+    float vbat = readBatteryVoltage();
+    setDisplayBatteryVoltage(vbat);
     JsonDocument battDoc;
     battDoc["type"] = "battery";
     battDoc["hwid"] = myHwId;
-    battDoc["voltage"] = readBatteryVoltage();
+    battDoc["voltage"] = vbat;
     if (isHub) forwardToApp(battDoc);
     else sendToHub(battDoc);
   }

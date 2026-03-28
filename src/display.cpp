@@ -32,6 +32,9 @@ static uint32_t dispCountdownEndMs  = 0;
 // Message (max 21 chars — one line at text size 1)
 static char dispMessage[22] = "";
 
+// Battery voltage — updated from main loop; -1 = not yet read
+static float dispBatteryVoltage = -1.0f;
+
 // ---- Pending display cache (used when menu is open) ----
 
 struct PendingDisplay {
@@ -59,6 +62,18 @@ static void drawCentered(const char* text, int y, uint8_t size) {
   if (x < 0) x = 0;
   oled.setCursor(x, y);
   oled.print(text);
+}
+
+// Draw a low-battery icon in the top-right corner (13x7px).
+// Only drawn when voltage is known and ≤ 3.4 V (≈15% for a LiPo).
+static void drawLowBatteryIcon() {
+  if (dispBatteryVoltage < 0.0f || dispBatteryVoltage > 3.4f) return;
+  // Body outline: 11x7 px
+  oled.drawRect(114, 0, 11, 7, SSD1306_WHITE);
+  // Positive terminal nub: 2x3 px
+  oled.fillRect(125, 2, 2, 3, SSD1306_WHITE);
+  // Low-charge fill: 2px wide out of 9px interior
+  oled.fillRect(115, 1, 2, 5, SSD1306_WHITE);
 }
 
 // ---- Normal display render ----
@@ -131,6 +146,7 @@ static void renderDisplay() {
     }
   }
 
+  drawLowBatteryIcon();
   oled.display();
 }
 
@@ -195,6 +211,10 @@ void showHotspotOnDisplay() {
 
 void refreshDisplay() {
   renderDisplay();
+}
+
+void setDisplayBatteryVoltage(float v) {
+  dispBatteryVoltage = v;
 }
 
 void startCountdownOnDisplay(uint32_t durationMs) {
@@ -280,6 +300,7 @@ static void renderRfidPrompt() {
     oled.setCursor(72, 46);  oled.print("of box");
   }
 
+  drawLowBatteryIcon();
   oled.display();
 }
 
