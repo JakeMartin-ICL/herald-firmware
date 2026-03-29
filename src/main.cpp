@@ -760,6 +760,7 @@ static void renderMenu() {
     strncpy(itemBufs[count], "Choose WiFi", 23);  itemPtrs[count] = itemBufs[count]; count++;
     if (isHub) {
       strncpy(itemBufs[count], "Become Hotspot", 23); itemPtrs[count] = itemBufs[count]; count++;
+      strncpy(itemBufs[count], "Restart mDNS",   23); itemPtrs[count] = itemBufs[count]; count++;
     }
     snprintf(itemBufs[count], 24, "Bright: %s", BRIGHT_LABELS[brightnessStepIndex()]);
     itemPtrs[count] = itemBufs[count]; count++;
@@ -861,7 +862,7 @@ static void switchToHotspot() {
 static void menuEnter() {
   menuLastInput = millis();
   if (menuLayer == MENU_MAIN) {
-    int brightCursor = isHub ? 3 : 2;
+    int brightCursor = isHub ? 4 : 2;
     if (menuCursor == 0) {
       closeMenu();
     } else if (menuCursor == 1) {
@@ -870,6 +871,12 @@ static void menuEnter() {
       renderMenu();
     } else if (menuCursor == 2 && isHub) {
       switchToHotspot(); // "Become Hotspot"
+    } else if (menuCursor == 3 && isHub) {
+      MDNS.end();
+      if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
+      showMessageOnDisplay("mDNS restarted", HUB_HOSTNAME);
+      delay(1500);
+      closeMenu();
     } else if (menuCursor == brightCursor) {
       cycleBrightness(); // cycles brightness and stays on this item
       renderMenu();
@@ -889,8 +896,8 @@ static void menuEnter() {
 
 static void menuNext() {
   menuLastInput = millis();
-  // Count items for current layer (MENU_MAIN: Exit + Choose WiFi + Brightness + optional Hotspot)
-  int count = (menuLayer == MENU_MAIN) ? (isHub ? 4 : 3) : (2 + credentialCount);
+  // Count items for current layer (MENU_MAIN: Exit + Choose WiFi + [Hotspot + mDNS] + Brightness)
+  int count = (menuLayer == MENU_MAIN) ? (isHub ? 5 : 3) : (2 + credentialCount);
   menuCursor = (menuCursor + 1) % count;
   renderMenu();
 }

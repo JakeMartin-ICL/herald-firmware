@@ -471,15 +471,19 @@ void electHub() {
 #elif defined(FORCE_CLIENT)
   becomeClient();
 #else
-  WiFiClient testClient;
   Serial.println("Checking for existing hub...");
-  bool found = testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT);
-  if (found) {
+  bool found = false;
+  for (int attempt = 0; attempt < 3 && !found; attempt++) {
+    if (attempt > 0) delay(600);
+    WiFiClient testClient;
+    found = testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT);
     testClient.stop();
+  }
+  if (found) {
     Serial.println("Hub found!");
     becomeClient();
   } else {
-    Serial.println("No hub found — becoming hub");
+    Serial.println("No hub found after 3 attempts — becoming hub");
     becomeHub();
   }
 #endif
