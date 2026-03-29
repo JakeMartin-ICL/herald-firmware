@@ -18,23 +18,40 @@ void otaProgressCallback(int current, int total) {
 void otaTaskFn(void* param) {
   OtaArgs* args = (OtaArgs*)param;
 
+  // Client boxes disconnect WiFi after election; reconnect here (safe: own task stack,
+  // not the WiFi/ESP-NOW callback context where delay() would block the event loop).
+  if (!isHub && WiFi.status() != WL_CONNECTED) {
+    debugLog("OTA: reconnecting WiFi...");
+    extern bool connectWifi();
+    if (!connectWifi()) {
+      debugLog("OTA: WiFi reconnect failed, aborting");
+      delete args;
+      if (otaProgressQueue) { vQueueDelete(otaProgressQueue); otaProgressQueue = NULL; }
+      otaInProgress = false;
+      vTaskDelete(NULL);
+      return;
+    }
+  }
+
+  debugLog("OTA: starting update from " + String(args->url));
+
   WiFiClientSecure wifiClient;
   wifiClient.setInsecure();
   httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   httpUpdate.onProgress(otaProgressCallback);
 
   t_httpUpdate_return ret = httpUpdate.update(wifiClient, args->url);
-  delete args;
 
   if (ret == HTTP_UPDATE_OK) {
     strncpy(otaCompleteVersion, args->version, sizeof(otaCompleteVersion) - 1);
+  }
+  delete args;
+
+  if (ret == HTTP_UPDATE_OK) {
     otaComplete = true; // main loop handles notification, clean disconnect, and restart
   } else {
     Serial.printf("OTA failed: %s\n", httpUpdate.getLastErrorString().c_str());
-    if (otaProgressQueue) {
-      vQueueDelete(otaProgressQueue);
-      otaProgressQueue = NULL;
-    }
+    if (otaProgressQueue) { vQueueDelete(otaProgressQueue); otaProgressQueue = NULL; }
     otaInProgress = false;
   }
 
@@ -46,21 +63,9 @@ void performOtaUpdate(const char* url, const char* version) {
   otaInProgress = true;
   otaLastPercent = -1;
 
-  // Client boxes disconnect WiFi after election; reconnect now for the HTTP download.
-  if (!isHub && WiFi.status() != WL_CONNECTED) {
-    debugLog("OTA: reconnecting WiFi...");
-    extern bool connectWifi();
-    if (!connectWifi()) {
-      debugLog("OTA: WiFi reconnect failed, aborting");
-      otaInProgress = false;
-      return;
-    }
-  }
-
-  debugLog("OTA: starting update from " + String(url));
-
-  // Run OTA in a background task for both hub and client so the main loop keeps
-  // running (wsServer/wsClient.loop()), responding to pings and draining receive buffers.
+  // Run OTA in a background task so the main loop keeps running (wsServer/wsClient.loop()),
+  // responding to pings and draining receive buffers. WiFi reconnect also happens in the
+  // task to avoid blocking the ESP-NOW/WiFi callback context.
   otaProgressQueue = xQueueCreate(20, sizeof(int));
   OtaArgs* args = new OtaArgs();
   strncpy(args->url, url, sizeof(args->url) - 1);
