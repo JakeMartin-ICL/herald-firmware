@@ -702,9 +702,7 @@ void debugLog(const char* message) {
     if (isHub) {
       forwardToApp(doc);
     } else {
-      String out;
-      serializeJson(doc, out);
-      wsClient.sendTXT(out);
+      sendToHub(doc);
     }
   }
 }
