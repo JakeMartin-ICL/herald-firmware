@@ -80,6 +80,14 @@ static void handleHelloFromApp(uint8_t clientNum) {
   ack["type"] = "hello_ack";
   ack["client"] = "hub";
   ack["version"] = FIRMWARE_VERSION;
+  // Include GitHub config if hub has one (hello_ack is not forwarded to app log)
+  if (getGitHubConfigEnteredAt() > 0) {
+    const GitHubConfig& cfg = getGitHubConfig();
+    JsonObject ghCfg = ack["github_config"].to<JsonObject>();
+    ghCfg["pat"]        = cfg.pat;
+    ghCfg["gist_id"]    = cfg.gist_id;
+    ghCfg["entered_at"] = cfg.enteredAt;
+  }
   sendToClient(clientNum, ack);
 
   JsonDocument hubBox;
@@ -133,6 +141,18 @@ static void handleHelloFromBox(uint8_t clientNum, JsonDocument& doc) {
 
   clientHwIds[clientNum] = hwId;
   clientVersions[clientNum] = version;
+
+  // Sync GitHub config: if hub has a newer config, push it to this box
+  long boxEnteredAt = doc["github_config_entered_at"] | 0L;
+  if (getGitHubConfigEnteredAt() > boxEnteredAt) {
+    const GitHubConfig& cfg = getGitHubConfig();
+    JsonDocument cfgMsg;
+    cfgMsg["type"]       = "github_config_set";
+    cfgMsg["pat"]        = cfg.pat;
+    cfgMsg["gist_id"]    = cfg.gist_id;
+    cfgMsg["entered_at"] = cfg.enteredAt;
+    sendToClient(clientNum, cfgMsg);
+  }
 
   JsonDocument assign;
   assign["type"] = "assigned";
@@ -196,6 +216,18 @@ static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
     if (debugModeEnabled) {
       debugLog("Game state backed up (" + String(out.length()) + " bytes)");
     }
+  } else if (strcmp(msgType, "github_config_set") == 0) {
+    GitHubConfig cfg = {};
+    strncpy(cfg.pat,     doc["pat"]     | "", sizeof(cfg.pat)     - 1);
+    strncpy(cfg.gist_id, doc["gist_id"] | "", sizeof(cfg.gist_id) - 1);
+    cfg.enteredAt = doc["entered_at"] | 0L;
+    saveGitHubConfig(cfg);
+    // Broadcast to all connected WS client boxes
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (clientHwIds[i] != "" && !clientIsApp[i]) sendToClient(i, doc);
+    }
+    // Broadcast to ESP-NOW connected boxes
+    sendToAllBoxesEspNow(doc);
   } else if (strcmp(msgType, "state_backup_get") == 0) {
     sendStoredStateBackup(clientNum);
   } else if (strcmp(msgType, "state_backup_clear") == 0) {
@@ -317,6 +349,7 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
       hello["client"] = "box";
       hello["hwid"] = myHwId;
       hello["version"] = FIRMWARE_VERSION;
+      hello["github_config_entered_at"] = getGitHubConfigEnteredAt();
       String out;
       serializeJson(hello, out);
       wsClient.sendTXT(out);
@@ -378,6 +411,13 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
         }
         saveCredentials();
         debugLog("WiFi credentials updated");
+      } else if (strcmp(msgType, "github_config_set") == 0) {
+        GitHubConfig cfg = {};
+        strncpy(cfg.pat,     doc["pat"]     | "", sizeof(cfg.pat)     - 1);
+        strncpy(cfg.gist_id, doc["gist_id"] | "", sizeof(cfg.gist_id) - 1);
+        cfg.enteredAt = doc["entered_at"] | 0L;
+        saveGitHubConfig(cfg);
+        debugLog("GitHub config updated");
       }
       break;
     }

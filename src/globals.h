@@ -76,6 +76,12 @@ struct OtaArgs {
   char version[64];
 };
 
+struct GitHubConfig {
+  char pat[256];
+  char gist_id[64];
+  long enteredAt;   // Unix seconds; 0 = not configured
+};
+
 // ---- Shared globals (defined in main.cpp) ----
 
 extern bool isHub;
@@ -97,6 +103,10 @@ extern int credentialCount;
 
 // main.cpp
 float readBatteryVoltage();
+void loadGitHubConfig();
+void saveGitHubConfig(const GitHubConfig& cfg);
+long getGitHubConfigEnteredAt();
+const GitHubConfig& getGitHubConfig();
 void debugLog(const char* message);
 void debugLog(String message);
 void sendToHub(JsonDocument& doc);

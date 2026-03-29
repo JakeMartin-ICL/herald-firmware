@@ -53,6 +53,35 @@ void loadCredentials() {
 #endif
 }
 
+// ---- GitHub config (NVS) ----
+
+static GitHubConfig githubConfig = {};
+
+long getGitHubConfigEnteredAt() { return githubConfig.enteredAt; }
+const GitHubConfig& getGitHubConfig() { return githubConfig; }
+
+void loadGitHubConfig() {
+  Preferences prefs;
+  prefs.begin("herald", true);
+  String pat    = prefs.getString("gh_pat",       "");
+  String gistId = prefs.getString("gh_gist_id",   "");
+  long at       = prefs.getLong(  "gh_entered_at", 0L);
+  prefs.end();
+  strncpy(githubConfig.pat,     pat.c_str(),    sizeof(githubConfig.pat)     - 1);
+  strncpy(githubConfig.gist_id, gistId.c_str(), sizeof(githubConfig.gist_id) - 1);
+  githubConfig.enteredAt = at;
+}
+
+void saveGitHubConfig(const GitHubConfig& cfg) {
+  githubConfig = cfg;
+  Preferences prefs;
+  prefs.begin("herald", false);
+  prefs.putString("gh_pat",       cfg.pat);
+  prefs.putString("gh_gist_id",   cfg.gist_id);
+  prefs.putLong(  "gh_entered_at", cfg.enteredAt);
+  prefs.end();
+}
+
 static uint8_t ledBrightness = 255;     // persisted; 100% by default
 static bool pendingBrightnessNotify = false; // set true to send box_brightness from the main loop
 
@@ -981,6 +1010,7 @@ void setup() {
   initRfid();
 
   loadCredentials();
+  loadGitHubConfig();
 
   if (!connectWifi()) {
     Serial.println("Saved networks failed — scanning for herald hotspot...");
