@@ -829,22 +829,25 @@ static void switchWifi(int credIdx) {
 }
 
 static void switchToHotspot() {
+  extern void becomeClient();
+  extern void becomeHub();
   menuLayer = MENU_NONE;
   // Always scan first — join an existing hotspot if found, otherwise become hub
   showMessageOnDisplay("Scanning...", HOTSPOT_SSID);
   if (connectToHotspot()) {
-    // Found an existing hotspot: connect briefly to align ESP-NOW channel, then drop
-    WiFi.setSleep(false);
-    WiFi.disconnect(false);
-    showMessageOnDisplay("Switched to", HOTSPOT_SSID);
-    delay(1500);
-    refreshDisplay();
+    // Found an existing hotspot: become a client (inits ESP-NOW, sends hello, disconnects WiFi)
+    becomeClient();
   } else {
-    // No existing hotspot found — become the hub
+    // No existing hotspot — start one and become hub
     activateHotspot();
-    MDNS.end();
-    if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
-    refreshDisplay();
+    if (!isHub) {
+      becomeHub();
+    } else {
+      // Already hub: re-advertise mDNS
+      MDNS.end();
+      if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
+      refreshDisplay();
+    }
   }
 }
 
