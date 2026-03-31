@@ -830,29 +830,20 @@ static void switchWifi(int credIdx) {
 
 static void switchToHotspot() {
   menuLayer = MENU_NONE;
-  if (isHub) {
-    activateHotspot();
-    MDNS.end();
-    if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
-    return;
-  }
-  // Client: connect briefly to align ESP-NOW channel, then drop association
-  showMessageOnDisplay("Connecting...", HOTSPOT_SSID);
-  WiFi.begin(HOTSPOT_SSID, HOTSPOT_PASS);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    attempts++;
-  }
-  if (WiFi.status() == WL_CONNECTED) {
+  // Always scan first — join an existing hotspot if found, otherwise become hub
+  showMessageOnDisplay("Scanning...", HOTSPOT_SSID);
+  if (connectToHotspot()) {
+    // Found an existing hotspot: connect briefly to align ESP-NOW channel, then drop
     WiFi.setSleep(false);
     WiFi.disconnect(false);
     showMessageOnDisplay("Switched to", HOTSPOT_SSID);
     delay(1500);
     refreshDisplay();
   } else {
-    showMessageOnDisplay("Connect failed", HOTSPOT_SSID);
-    delay(2000);
+    // No existing hotspot found — become the hub
+    activateHotspot();
+    MDNS.end();
+    if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
     refreshDisplay();
   }
 }
