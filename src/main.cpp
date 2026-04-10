@@ -484,13 +484,14 @@ static void applyLedAnimBreathe(const char* colorHex, bool rainbow, uint32_t hal
   startAnimEngine(2, true);
 }
 
-static void applyLedAnimSpinner(const char* colorHex, bool rainbow, uint32_t stepMs, uint32_t fadeMs) {
+static void applyLedAnimSpinner(const char* colorHex, bool rainbow, uint32_t stepMs, uint32_t fadeMs, bool reverse) {
   stopLedAnim();
   uint8_t br = 0, bg = 0, bb = 0;
   if (!rainbow) parseHexColorRaw(colorHex, br, bg, bb);
   const float tail[] = {1.0f, 0.7f, 0.4f, 0.15f, 0.03f};
-  for (int headPos = 0; headPos < LED_RING_COUNT; headPos++) {
-    AnimFrame& af = animFrames[headPos];
+  for (int step = 0; step < LED_RING_COUNT; step++) {
+    int headPos = reverse ? (LED_RING_COUNT - 1 - step) : step;
+    AnimFrame& af = animFrames[step];
     af.ms = stepMs; af.fade = true;
     memset(af.r, 0, LED_RING_COUNT); memset(af.g, 0, LED_RING_COUNT); memset(af.b, 0, LED_RING_COUNT);
     uint8_t hr = br, hg = bg, hb = bb;
@@ -499,7 +500,9 @@ static void applyLedAnimSpinner(const char* colorHex, bool rainbow, uint32_t ste
       hr = c.r; hg = c.g; hb = c.b;
     }
     for (int t = 0; t < 5; t++) {
-      int pos = (headPos - t + LED_RING_COUNT) % LED_RING_COUNT;
+      int pos = reverse
+        ? ((headPos + t) % LED_RING_COUNT)
+        : ((headPos - t + LED_RING_COUNT) % LED_RING_COUNT);
       af.r[pos] = (uint8_t)(hr * tail[t]);
       af.g[pos] = (uint8_t)(hg * tail[t]);
       af.b[pos] = (uint8_t)(hb * tail[t]);
@@ -672,7 +675,7 @@ void handleLedPatternCommand(JsonDocument& doc) {
   else if (strcmp(t, "led_thirds")         == 0) applyLedThirds(doc["c1"] | "#000000", doc["c2"] | "#000000", doc["c3"] | "#000000");
   else if (strcmp(t, "led_sectors")        == 0) applyLedSectors(doc);
   else if (strcmp(t, "led_anim_breathe")   == 0) applyLedAnimBreathe(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["halfPeriodMs"] | 2000);
-  else if (strcmp(t, "led_anim_spinner")   == 0) applyLedAnimSpinner(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["stepMs"] | 50, doc["fadeMs"] | 0);
+  else if (strcmp(t, "led_anim_spinner")   == 0) applyLedAnimSpinner(doc["color"] | "#ffffff", doc["rainbow"] | false, doc["stepMs"] | 50, doc["fadeMs"] | 0, doc["reverse"] | false);
   else if (strcmp(t, "led_anim_choosing")  == 0) applyLedAnimChoosing(doc);
   else if (strcmp(t, "led_anim_upkeep")    == 0) applyLedAnimUpkeep();
   else if (strcmp(t, "led_anim_stop")      == 0) stopLedAnim();

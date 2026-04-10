@@ -33,7 +33,7 @@ void sendToClient(uint8_t clientNum, JsonDocument& doc) {
 
 static void onServerDisconnected(uint8_t clientNum) {
   if (clientIsApp[clientNum]) {
-    debugLog("App disconnected");
+    debugLog("App disconnected (heap: " + String(ESP.getFreeHeap()) + ")");
     appClientNum = -1;
     clientIsApp[clientNum] = false;
   } else if (clientHwIds[clientNum] != "") {
@@ -60,21 +60,19 @@ static void sendStoredStateBackup(uint8_t clientNum) {
   String stored = f.readString();
   f.close();
 
-  JsonDocument stored_doc;
-  if (deserializeJson(stored_doc, stored) != DeserializationError::Ok) return;
-
-  JsonDocument msg;
-  msg["type"] = "state_backup";
-  msg["payload"] = stored_doc["payload"];
-  msg["compressed"] = stored_doc["compressed"];
-  sendToClient(clientNum, msg);
+  // File contains {"payload":...,"compressed":...}
+  // Prepend the type field without re-parsing
+  if (stored.length() < 2 || stored[0] != '{') return;
+  String msg = "{\"type\":\"state_backup\"," + stored.substring(1);
+  if (debugModeEnabled) debugLog("state_backup: " + String(msg.length()) + " bytes, heap: " + String(ESP.getFreeHeap()));
+  wsServer.sendTXT(clientNum, msg);
 }
 
 static void handleHelloFromApp(uint8_t clientNum) {
   clientIsApp[clientNum] = true;
   appClientNum = clientNum;
   rfidEnabled = false; // app controls RFID state; reset to known baseline on connect
-  debugLog("App connected");
+  debugLog("App connected (heap: " + String(ESP.getFreeHeap()) + ")");
 
   JsonDocument ack;
   ack["type"] = "hello_ack";
@@ -205,16 +203,16 @@ static void handleHubCommand(uint8_t clientNum, JsonDocument& doc) {
     debugLog("RFID write: " + String(doc["internalId"] | ""));
     handleRfidWrite(doc["internalId"] | "");
   } else if (strcmp(msgType, "state_backup") == 0) {
-    // Store { payload, compressed } to SPIFFS
-    JsonDocument stored;
-    stored["payload"] = doc["payload"];
-    stored["compressed"] = doc["compressed"];
-    String out;
-    serializeJson(stored, out);
+    // Store { payload, compressed } directly to SPIFFS without intermediate String
     File f = SPIFFS.open("/game_state.json", "w");
-    if (f) { f.print(out); f.close(); }
-    if (debugModeEnabled) {
-      debugLog("Game state backed up (" + String(out.length()) + " bytes)");
+    if (f) {
+      f.print("{\"payload\":");
+      serializeJson(doc["payload"], f);
+      f.print(",\"compressed\":");
+      serializeJson(doc["compressed"], f);
+      f.print("}");
+      if (debugModeEnabled) debugLog("Game state backed up (" + String(f.position()) + " bytes)");
+      f.close();
     }
   } else if (strcmp(msgType, "github_config_set") == 0) {
     GitHubConfig cfg = {};
@@ -435,7 +433,7 @@ void becomeHub() {
   Serial.println("Becoming hub");
   wsServer.begin();
   wsServer.onEvent(onServerEvent);
-  wsServer.enableHeartbeat(15000, 3000, 2);
+  wsServer.enableHeartbeat(15000, 6000, 2);
   Serial.printf("WebSocket server started on port %d\n", WS_PORT);
 
   initEspNow();
