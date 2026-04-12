@@ -5,8 +5,9 @@
 void otaProgressCallback(int current, int total) {
   if (total <= 0) return;
   int percent = (current * 100) / total;
-  if (percent == otaLastPercent) return;
-  otaLastPercent = percent;
+  int bucket = percent / 10; // only report at 10% boundaries
+  if (bucket == otaLastPercent) return;
+  otaLastPercent = bucket;
 
   if (otaProgressQueue) {
     xQueueSend(otaProgressQueue, &percent, 0);
@@ -62,6 +63,7 @@ void performOtaUpdate(const char* url, const char* version) {
   if (otaInProgress) return;
   otaInProgress = true;
   otaLastPercent = -1;
+  startOtaLed();
 
   // Run OTA in a background task so the main loop keeps running (wsServer/wsClient.loop()),
   // responding to pings and draining receive buffers. WiFi reconnect also happens in the

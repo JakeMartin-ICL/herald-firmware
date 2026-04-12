@@ -664,6 +664,34 @@ void tickCountdownLed() {
   FastLED.show();
 }
 
+// ---- OTA progress LED ----
+
+static bool otaLedActive = false;
+
+void startOtaLed() {
+  stopLedAnim();
+  stopCountdownLed();
+  otaLedActive = true;
+  fill_solid(ledRing, LED_RING_COUNT, CRGB::Black);
+  FastLED.show();
+}
+
+void stopOtaLed() {
+  if (!otaLedActive) return;
+  otaLedActive = false;
+  applyLedOff();
+}
+
+void updateOtaLed(int percent) {
+  if (!otaLedActive) return;
+  int ledsOn = (percent * LED_RING_COUNT) / 100;
+  if (ledsOn > LED_RING_COUNT) ledsOn = LED_RING_COUNT;
+  for (int i = 0; i < LED_RING_COUNT; i++) {
+    ledRing[i] = (i < ledsOn) ? CRGB(0, 0, GAMMA8[220]) : CRGB::Black;
+  }
+  FastLED.show();
+}
+
 void handleLedPatternCommand(JsonDocument& doc) {
   const char* t = doc["type"] | "";
   if      (strcmp(t, "led_off")            == 0) applyLedOff();
@@ -1044,6 +1072,7 @@ void loop() {
     if (otaProgressQueue) {
       int percent;
       if (xQueueReceive(otaProgressQueue, &percent, 0) == pdTRUE) {
+        updateOtaLed(percent);
         JsonDocument doc;
         doc["type"] = "ota_progress";
         doc["hwid"] = myHwId;
@@ -1053,6 +1082,7 @@ void loop() {
     }
 
     if (otaComplete) {
+      updateOtaLed(100);
       JsonDocument doc;
       doc["type"] = "ota_complete";
       doc["hwid"] = myHwId;
@@ -1066,12 +1096,14 @@ void loop() {
   } else {
     // Client: no WebSocket loop — communication is via ESP-NOW
     if (otaComplete) {
+      updateOtaLed(100);
       ESP.restart();
     }
 
     if (otaProgressQueue) {
       int percent;
       if (xQueueReceive(otaProgressQueue, &percent, 0) == pdTRUE) {
+        updateOtaLed(percent);
         JsonDocument doc;
         doc["type"] = "ota_progress";
         doc["hwid"] = myHwId;

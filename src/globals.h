@@ -136,6 +136,9 @@ void stopCountdownOnDisplay();
 void startCountdownLed(uint32_t durationMs, const char* colorHex, bool rainbow = false);
 void stopCountdownLed();
 void tickCountdownLed();
+void startOtaLed();
+void stopOtaLed();
+void updateOtaLed(int percent);
 void saveCredentials();
 
 // websockets.cpp
