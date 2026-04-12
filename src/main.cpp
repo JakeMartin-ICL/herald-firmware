@@ -100,22 +100,50 @@ static void loadLedBrightness() {
 }
 
 bool connectWifi() {
+  // Scan first so we only attempt networks that are actually visible,
+  // and can give them more retries without burning time on absent SSIDs.
+  Serial.println("Scanning for WiFi networks...");
+  showMessageOnDisplay("WiFi", "Scanning...");
+  int found = WiFi.scanNetworks();
+  Serial.printf("Scan complete: %d network(s) found\n", found);
+
   for (int i = 0; i < credentialCount; i++) {
+    bool visible = false;
+    for (int s = 0; s < found; s++) {
+      if (WiFi.SSID(s) == credentials[i].ssid) { visible = true; break; }
+    }
+    if (!visible) {
+      Serial.printf("Skipping %s (not in scan)\n", credentials[i].ssid.c_str());
+      continue;
+    }
+
     Serial.printf("Trying WiFi: %s\n", credentials[i].ssid.c_str());
     WiFi.begin(credentials[i].ssid.c_str(), credentials[i].password.c_str());
+
+    char dots[22] = "";
+    int dotsLen = 0;
+    showMessageOnDisplay(credentials[i].ssid.c_str(), dots);
+
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 5) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
       delay(500);
       Serial.print(".");
+      if (dotsLen < (int)sizeof(dots) - 1) dots[dotsLen++] = '.';
+      dots[dotsLen] = '\0';
+      showMessageOnDisplay(credentials[i].ssid.c_str(), dots);
       attempts++;
     }
+    Serial.println();
+
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("\nConnected to %s\n", credentials[i].ssid.c_str());
+      Serial.printf("Connected to %s\n", credentials[i].ssid.c_str());
+      WiFi.scanDelete();
       return true;
     }
     WiFi.disconnect();
-    Serial.println();
   }
+
+  WiFi.scanDelete();
   return false;
 }
 
