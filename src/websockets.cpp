@@ -473,6 +473,8 @@ void electHub() {
   bool found = false;
   for (int attempt = 0; attempt < 3 && !found; attempt++) {
     if (attempt > 0) delay(600);
+    const char* dots[] = {".", "..", "..."};
+    showMessageOnDisplay("Searching for hub", dots[attempt]);
     WiFiClient testClient;
     found = testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT);
     testClient.stop();
