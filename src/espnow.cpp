@@ -60,7 +60,7 @@ static void espNowSend(const uint8_t* mac, JsonDocument& doc) {
   String out;
   serializeJson(doc, out);
   if (out.length() > 250) {
-    Serial.printf("ESP-NOW: message too large (%d bytes), dropping\n", out.length());
+    debugLog("ESP-NOW: message too large (" + String(out.length()) + " bytes), dropping");
     return;
   }
   esp_now_send(mac, (const uint8_t*)out.c_str(), out.length());
@@ -74,7 +74,6 @@ void sendToBoxEspNow(const String& hwid, JsonDocument& doc) {
       return;
     }
   }
-  Serial.printf("ESP-NOW: no peer found for hwid %s\n", hwid.c_str());
   debugLog("ESP-NOW: no peer for " + hwid);
 }
 
@@ -199,8 +198,10 @@ static void onEspNowRecv(const uint8_t* mac_addr, const uint8_t* data, int len) 
 
 static void onEspNowSend(const uint8_t* mac, esp_now_send_status_t status) {
   if (status != ESP_NOW_SEND_SUCCESS) {
-    Serial.printf("ESP-NOW: send failed to %02X:%02X:%02X:%02X:%02X:%02X\n",
+    char buf[64];
+    snprintf(buf, sizeof(buf), "ESP-NOW: send failed to %02X:%02X:%02X:%02X:%02X:%02X",
       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    debugLog(String(buf));
   }
 }
 
