@@ -872,14 +872,8 @@ static void switchWifi(int credIdx) {
 
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.setSleep(false);
-    if (isHub) {
-      MDNS.end();
-      if (MDNS.begin(HUB_HOSTNAME)) MDNS.addService("ws", "tcp", WS_PORT);
-      showIpOnDisplay(WiFi.localIP().toString().c_str());
-    } else {
-      WiFi.disconnect(false); // stay on channel for ESP-NOW, drop association
-      refreshDisplay();
-    }
+    if (isHub) MDNS.end(); // tear down before election so the probe doesn't find ourselves
+    electHub(); // check for existing hub on new network; become client or hub accordingly
   } else {
     showMessageOnDisplay("Connect failed", ssid);
     delay(2000);
