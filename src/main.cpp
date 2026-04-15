@@ -11,8 +11,6 @@ bool otaInProgress = false;
 bool rfidEnabled = false;
 volatile bool otaComplete = false;
 char otaCompleteVersion[64] = "";
-QueueHandle_t otaProgressQueue = NULL;
-int otaLastPercent = -1;
 
 WebSocketsServer wsServer(WS_PORT);
 WebSocketsClient wsClient;
@@ -1094,18 +1092,6 @@ void loop() {
   if (isHub) {
     wsServer.loop();
 
-    if (otaProgressQueue) {
-      int percent;
-      if (xQueueReceive(otaProgressQueue, &percent, 0) == pdTRUE) {
-        updateOtaLed(percent);
-        JsonDocument doc;
-        doc["type"] = "ota_progress";
-        doc["hwid"] = myHwId;
-        doc["percent"] = percent;
-        forwardToApp(doc);
-      }
-    }
-
     if (otaComplete) {
       updateOtaLed(100);
       JsonDocument doc;
@@ -1127,17 +1113,6 @@ void loop() {
       ESP.restart();
     }
 
-    if (otaProgressQueue) {
-      int percent;
-      if (xQueueReceive(otaProgressQueue, &percent, 0) == pdTRUE) {
-        updateOtaLed(percent);
-        JsonDocument doc;
-        doc["type"] = "ota_progress";
-        doc["hwid"] = myHwId;
-        doc["percent"] = percent;
-        sendToHub(doc);
-      }
-    }
   }
 
   tickLedAnim();

@@ -92,8 +92,6 @@ extern bool otaInProgress;
 extern bool rfidEnabled;
 extern volatile bool otaComplete;
 extern char otaCompleteVersion[64];
-extern QueueHandle_t otaProgressQueue;
-extern int otaLastPercent;
 extern WebSocketsServer wsServer;
 extern WebSocketsClient wsClient;
 extern WifiCredential credentials[MAX_CREDENTIALS];
