@@ -28,6 +28,7 @@ void otaTaskFn(void* param) {
       vTaskDelete(NULL);
       return;
     }
+    showMessageOnDisplay("Updating", "");
   }
 
   debugLog("OTA: starting update from " + String(args->url));
