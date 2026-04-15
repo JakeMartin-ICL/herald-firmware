@@ -110,6 +110,10 @@ const GitHubConfig& getGitHubConfig();
 void debugLog(const char* message);
 void debugLog(String message);
 void sendToHub(JsonDocument& doc);
+bool connectWifi();
+bool connectToHotspot();
+void activateHotspot();
+void connectWifiOrHotspot();
 void setLed(bool on);
 void initLedRing();
 void handleLedCommand(JsonDocument& doc);
@@ -155,6 +159,8 @@ void sendToHubEspNow(JsonDocument& doc);
 int getEspNowPeerCount();
 const String& getEspNowPeerHwid(int i);
 const String& getEspNowPeerVersion(int i);
+bool scanForHub();
+void tickEspNowReconnect();
 
 // rfid.cpp
 void initRfid();

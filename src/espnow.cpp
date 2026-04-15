@@ -1,4 +1,5 @@
 #include "globals.h"
+#include "esp_wifi.h"
 
 // ---- Peer table (hub: maps MAC → hwid; client: just stores hub MAC) ----
 
@@ -14,6 +15,16 @@ static uint8_t    hubMac[6] = {};
 static bool       hubMacKnown = false;
 
 static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// ---- Scan / reconnect state ----
+
+static bool espNowInited = false;
+static bool isScanning = false;
+static volatile bool scanHubFound = false;
+static volatile bool rescanNeeded = false;
+static unsigned long lastRescanMs = 0;
+
+static const uint8_t SCAN_CHANNELS[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
 
 // ---- Peer management ----
 
@@ -144,7 +155,13 @@ static void onEspNowRecv(const uint8_t* mac_addr, const uint8_t* data, int len) 
         hubMacKnown = true;
         addEspNowPeer(hubMac);
         debugLog("ESP-NOW: hub found, peer registered");
+      } else if (isScanning && !macEqual(hubMac, mac_addr)) {
+        esp_now_del_peer(hubMac);
+        memcpy(hubMac, mac_addr, 6);
+        addEspNowPeer(hubMac);
+        debugLog("ESP-NOW: hub MAC changed, peer updated");
       }
+      if (isScanning) scanHubFound = true;
       return;
     }
 
@@ -202,12 +219,14 @@ static void onEspNowSend(const uint8_t* mac, esp_now_send_status_t status) {
     snprintf(buf, sizeof(buf), "ESP-NOW: send failed to %02X:%02X:%02X:%02X:%02X:%02X",
       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     debugLog(String(buf));
+    if (!isHub && !isScanning) rescanNeeded = true;
   }
 }
 
 // ---- Init ----
 
 void initEspNow() {
+  if (espNowInited) return;
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW init failed");
     return;
@@ -217,7 +236,55 @@ void initEspNow() {
 
   // Add broadcast peer so we can send discovery messages
   addEspNowPeer(BROADCAST_MAC);
+  espNowInited = true;
   Serial.println("ESP-NOW initialised");
+}
+
+// ---- Hub scan ----
+
+bool scanForHub() {
+  isScanning = true;
+  scanHubFound = false;
+
+  for (size_t i = 0; i < sizeof(SCAN_CHANNELS) && !scanHubFound; i++) {
+    esp_wifi_set_channel(SCAN_CHANNELS[i], WIFI_SECOND_CHAN_NONE);
+    delay(5);
+    sendHelloEspNow();
+    unsigned long start = millis();
+    while (!scanHubFound && (millis() - start) < 30) delay(1);
+  }
+
+  isScanning = false;
+  bool found = scanHubFound;
+  scanHubFound = false;
+  return found;
+}
+
+// ---- Runtime reconnect (call from main loop, client only) ----
+
+static void showReconnectLed() {
+  JsonDocument doc;
+  doc["type"] = "led_alternate_pair";
+  doc["a"] = "#ff0000";
+  doc["b"] = "#000000";
+  handleLedPatternCommand(doc);
+}
+
+void tickEspNowReconnect() {
+  if (!rescanNeeded || isScanning) return;
+  if (millis() - lastRescanMs < 5000) return;
+  rescanNeeded = false;
+  lastRescanMs = millis();
+  debugLog("ESP-NOW: channel lost, rescanning for hub...");
+  showReconnectLed();
+  showMessageOnDisplay("Send failed", "Scanning for hub...");
+  if (scanForHub()) {
+    debugLog("ESP-NOW: hub reacquired on new channel");
+    showMessageOnDisplay("Reconnected", nullptr);
+  } else {
+    debugLog("ESP-NOW: hub not found during rescan");
+    showMessageOnDisplay("Hub not found", "Press btn to retry");
+  }
 }
 
 // ---- Client: send hello to hub (broadcast) ----

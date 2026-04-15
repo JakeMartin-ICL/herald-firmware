@@ -147,7 +147,7 @@ bool connectWifi() {
   return false;
 }
 
-static bool connectToHotspot() {
+bool connectToHotspot() {
   Serial.printf("Scanning for herald hotspot (%s)...\n", HOTSPOT_SSID);
   int n = WiFi.scanNetworks();
   bool found = false;
@@ -168,11 +168,21 @@ static bool connectToHotspot() {
   return WiFi.status() == WL_CONNECTED;
 }
 
-static void activateHotspot() {
+void activateHotspot() {
   WiFi.softAP(HOTSPOT_SSID, HOTSPOT_PASS);
   isHotspot = true;
   Serial.printf("Herald hotspot started: %s\n", HOTSPOT_SSID);
   showHotspotOnDisplay();
+}
+
+void connectWifiOrHotspot() {
+  if (!connectWifi()) {
+    Serial.println("Saved networks failed — scanning for herald hotspot...");
+    if (!connectToHotspot()) {
+      Serial.println("No hotspot found — becoming hotspot hub");
+      activateHotspot();
+    }
+  }
 }
 
 // ---- Hardware ID ----
@@ -1064,20 +1074,13 @@ void setup() {
   loadCredentials();
   loadGitHubConfig();
 
-  if (!connectWifi()) {
-    Serial.println("Saved networks failed — scanning for herald hotspot...");
-    if (!connectToHotspot()) {
-      Serial.println("No hotspot found — becoming hotspot hub");
-      activateHotspot();
-    }
-  }
-
+  // Start WiFi radio (needed for MAC address and ESP-NOW); actual connection happens in electHub
+  WiFi.mode(WIFI_STA);
   WiFi.setSleep(false); // disable modem sleep — prevents missed incoming packets
 
   myHwId = getHwId();
   Serial.printf("Hardware ID: %s\n", myHwId.c_str());
 
-  delay(500);
   electHub();
 
   if (isHub && !isHotspot) showIpOnDisplay(WiFi.localIP().toString().c_str());
@@ -1117,6 +1120,8 @@ void loop() {
     }
   } else {
     // Client: no WebSocket loop — communication is via ESP-NOW
+    tickEspNowReconnect();
+
     if (otaComplete) {
       updateOtaLed(100);
       ESP.restart();

@@ -464,27 +464,24 @@ void becomeClient() {
 // ---- Election ----
 
 void electHub() {
-#ifdef FORCE_HUB
+#if defined(FORCE_HUB)
+  connectWifiOrHotspot();
   becomeHub();
 #elif defined(FORCE_CLIENT)
+  initEspNow();
   becomeClient();
 #else
-  Serial.println("Checking for existing hub...");
-  bool found = false;
-  for (int attempt = 0; attempt < 3 && !found; attempt++) {
-    if (attempt > 0) delay(600);
-    const char* dots[] = {".", "..", "..."};
-    showMessageOnDisplay("Searching for hub", dots[attempt]);
-    WiFiClient testClient;
-    found = testClient.connect((String(HUB_HOSTNAME) + ".local").c_str(), WS_PORT);
-    testClient.stop();
-  }
-  if (found) {
-    Serial.println("Hub found!");
+  // Scan for an existing hub via ESP-NOW — client boxes never need to connect WiFi
+  Serial.println("Scanning for hub via ESP-NOW...");
+  showMessageOnDisplay("Searching", "for hub...");
+  initEspNow();
+  if (scanForHub()) {
+    Serial.println("Hub found via ESP-NOW — becoming client");
     becomeClient();
-  } else {
-    Serial.println("No hub found after 3 attempts — becoming hub");
-    becomeHub();
+    return;
   }
+  Serial.println("No hub found — connecting WiFi as hub");
+  connectWifiOrHotspot();
+  becomeHub();
 #endif
 }
