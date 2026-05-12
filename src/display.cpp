@@ -10,12 +10,28 @@
 static Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 static bool oledOk = false;
 
+static const uint8_t MAX_CANVAS_ELEMENTS = 18;
+static const uint8_t CANVAS_TEXT_MAX = 31;
+
+struct CanvasElement {
+  char kind;
+  int16_t p[7];
+  char text[CANVAS_TEXT_MAX + 1];
+};
+
+struct CanvasState {
+  bool active;
+  uint8_t count;
+  CanvasElement elements[MAX_CANVAS_ELEMENTS];
+};
+
 // ---- Normal display state ----
 
 static char dispName[48]   = "";
 static char dispStatus[32] = "";
 static char dispArrow[10]  = "";   // 'up' | 'left' | 'right'
 static char dispLayout[20] = "";   // 'inis_hub' | ""
+static CanvasState dispCanvas = {};
 
 // Round display
 static int  dispRound     = 0;
@@ -45,6 +61,7 @@ struct PendingDisplay {
   char     message[22];
   char     arrow[10];
   char     layout[20];
+  CanvasState canvas;
   bool     showRound;
   int      round;
   bool     showTimer;
@@ -105,12 +122,47 @@ static void renderLargeArrow(bool left) {
   }
 }
 
+static void renderCanvas() {
+  for (uint8_t i = 0; i < dispCanvas.count; i++) {
+    const CanvasElement& el = dispCanvas.elements[i];
+    switch (el.kind) {
+      case 't':
+        oled.setTextSize((el.p[2] > 0) ? el.p[2] : 1);
+        oled.setCursor(el.p[0], el.p[1]);
+        oled.print(el.text);
+        break;
+      case 'l':
+        oled.drawLine(el.p[0], el.p[1], el.p[2], el.p[3], SSD1306_WHITE);
+        break;
+      case 'r':
+        if (el.p[4]) oled.fillRect(el.p[0], el.p[1], el.p[2], el.p[3], SSD1306_WHITE);
+        else         oled.drawRect(el.p[0], el.p[1], el.p[2], el.p[3], SSD1306_WHITE);
+        break;
+      case 'g':
+        if (el.p[6]) oled.fillTriangle(el.p[0], el.p[1], el.p[2], el.p[3], el.p[4], el.p[5], SSD1306_WHITE);
+        else         oled.drawTriangle(el.p[0], el.p[1], el.p[2], el.p[3], el.p[4], el.p[5], SSD1306_WHITE);
+        break;
+      case 'c':
+        if (el.p[3]) oled.fillCircle(el.p[0], el.p[1], el.p[2], SSD1306_WHITE);
+        else         oled.drawCircle(el.p[0], el.p[1], el.p[2], SSD1306_WHITE);
+        break;
+    }
+  }
+}
+
 // ---- Normal display render ----
 
 static void renderDisplay() {
   if (!oledOk) return;
   oled.clearDisplay();
   oled.setTextColor(SSD1306_WHITE);
+
+  if (dispCanvas.active) {
+    renderCanvas();
+    drawLowBatteryIcon();
+    oled.display();
+    return;
+  }
 
   // Special layout: Inis hub flock step
   if (strcmp(dispLayout, "inis_hub") == 0) {
@@ -404,7 +456,70 @@ void tickDisplay() {
   }
 }
 
+static void parseCanvasDoc(JsonDocument& doc, CanvasState& canvas) {
+  const char* mode = doc["m"] | "";
+  canvas.active = (strcmp(mode, "c") == 0);
+  canvas.count = 0;
+  if (!canvas.active) return;
+
+  JsonArray elements = doc["e"].as<JsonArray>();
+  for (JsonArray item : elements) {
+    if (canvas.count >= MAX_CANVAS_ELEMENTS || item.size() == 0) break;
+    const char* kind = item[0] | "";
+    if (kind[0] == '\0') continue;
+
+    CanvasElement& el = canvas.elements[canvas.count];
+    memset(&el, 0, sizeof(el));
+    el.kind = kind[0];
+
+    switch (el.kind) {
+      case 't': {
+        if (item.size() < 5) continue;
+        el.p[0] = item[1] | 0;
+        el.p[1] = item[2] | 0;
+        el.p[2] = item[3] | 1;
+        const char* text = item[4] | "";
+        strncpy(el.text, text, CANVAS_TEXT_MAX);
+        el.text[CANVAS_TEXT_MAX] = '\0';
+        canvas.count++;
+        break;
+      }
+      case 'l':
+        if (item.size() < 5) continue;
+        for (uint8_t i = 0; i < 4; i++) el.p[i] = item[i + 1] | 0;
+        canvas.count++;
+        break;
+      case 'r':
+        if (item.size() < 6) continue;
+        for (uint8_t i = 0; i < 5; i++) el.p[i] = item[i + 1] | 0;
+        canvas.count++;
+        break;
+      case 'g':
+        if (item.size() < 8) continue;
+        for (uint8_t i = 0; i < 7; i++) el.p[i] = item[i + 1] | 0;
+        canvas.count++;
+        break;
+      case 'c':
+        if (item.size() < 5) continue;
+        for (uint8_t i = 0; i < 4; i++) el.p[i] = item[i + 1] | 0;
+        canvas.count++;
+        break;
+    }
+  }
+}
+
 static void applyDisplayDoc(JsonDocument& doc) {
+  parseCanvasDoc(doc, dispCanvas);
+  if (dispCanvas.active) {
+    dispShowRound = false;
+    dispShowTimer = false;
+    dispTimerRunning = false;
+    dispMessage[0] = '\0';
+    dispArrow[0] = '\0';
+    dispLayout[0] = '\0';
+    return;
+  }
+
   const char* name   = doc["name"]   | "";
   const char* status = doc["status"] | "";
   strncpy(dispName,   name,   sizeof(dispName)   - 1);
@@ -457,6 +572,7 @@ void applyPendingDisplay() {
   dispArrow[sizeof(dispArrow) - 1] = '\0';
   strncpy(dispLayout,  pendingDisplay.layout,  sizeof(dispLayout)  - 1);
   dispLayout[sizeof(dispLayout) - 1] = '\0';
+  dispCanvas       = pendingDisplay.canvas;
   dispShowRound    = pendingDisplay.showRound;
   dispRound        = pendingDisplay.round;
   dispShowTimer    = pendingDisplay.showTimer;
@@ -491,6 +607,12 @@ void handleDisplayCommand(JsonDocument& doc) {
     pendingDisplay.showTimer    = doc["timerRunning"].is<bool>();
     pendingDisplay.timerRunning = doc["timerRunning"] | false;
     pendingDisplay.timerSecs    = doc["timerSecs"] | 0;
+    parseCanvasDoc(doc, pendingDisplay.canvas);
+    if (pendingDisplay.canvas.active) {
+      pendingDisplay.showRound = false;
+      pendingDisplay.showTimer = false;
+      pendingDisplay.timerRunning = false;
+    }
     pendingDisplay.pending      = true;
     return;
   }
