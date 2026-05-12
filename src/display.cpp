@@ -29,8 +29,6 @@ struct CanvasState {
 
 static char dispName[48]   = "";
 static char dispStatus[32] = "";
-static char dispArrow[10]  = "";   // 'up' | 'left' | 'right'
-static char dispLayout[20] = "";   // 'inis_hub' | ""
 static CanvasState dispCanvas = {};
 
 // Round display
@@ -59,8 +57,6 @@ struct PendingDisplay {
   char     name[48];
   char     status[32];
   char     message[22];
-  char     arrow[10];
-  char     layout[20];
   CanvasState canvas;
   bool     showRound;
   int      round;
@@ -95,31 +91,6 @@ static void drawLowBatteryIcon() {
   oled.fillRect(125, 2, 2, 3, SSD1306_WHITE);
   // Low-charge fill: 2px wide out of 9px interior
   oled.fillRect(115, 1, 2, 5, SSD1306_WHITE);
-}
-
-// ---- Arrow / special layout helpers ----
-
-// Inis hub flock step: up arrow + "Clockwise" on top half,
-// "Anti-clockwise" + down arrow on bottom half.
-static void renderInisHub() {
-  // Up arrow: tip at (64,2), base at (54,12)–(74,12)
-  oled.fillTriangle(54, 12, 74, 12, 64, 2, SSD1306_WHITE);
-  drawCentered("Clockwise", 15, 1);
-  oled.drawFastHLine(0, 31, SCREEN_WIDTH, SSD1306_WHITE);
-  drawCentered("Anti-clockwise", 34, 1);
-  // Down arrow: base at (54,51)–(74,51), tip at (64,61)
-  oled.fillTriangle(54, 51, 74, 51, 64, 61, SSD1306_WHITE);
-}
-
-// Large left/right arrow filling most of the screen (draft step).
-static void renderLargeArrow(bool left) {
-  if (left) {
-    oled.fillTriangle(4, 32, 44,  8, 44, 56, SSD1306_WHITE); // head
-    oled.fillRect(44, 22, 80, 20, SSD1306_WHITE);             // shaft
-  } else {
-    oled.fillTriangle(124, 32, 84,  8, 84, 56, SSD1306_WHITE);
-    oled.fillRect(4,  22, 80, 20, SSD1306_WHITE);
-  }
 }
 
 static void renderCanvas() {
@@ -164,29 +135,7 @@ static void renderDisplay() {
     return;
   }
 
-  // Special layout: Inis hub flock step
-  if (strcmp(dispLayout, "inis_hub") == 0) {
-    renderInisHub();
-    drawLowBatteryIcon();
-    oled.display();
-    return;
-  }
-
-  // Large directional arrow — fills most of screen, skips text layout
-  if (strcmp(dispArrow, "left") == 0 || strcmp(dispArrow, "right") == 0) {
-    renderLargeArrow(strcmp(dispArrow, "left") == 0);
-    drawLowBatteryIcon();
-    oled.display();
-    return;
-  }
-
-  // Small up arrow at top (brenn step); shifts text down
   int topOffset = 0;
-  if (strcmp(dispArrow, "up") == 0) {
-    // tip at (64,2), base at (50,15)–(78,15)
-    oled.fillTriangle(50, 15, 78, 15, 64, 2, SSD1306_WHITE);
-    topOffset = 18;
-  }
 
   // Determine which rows to show below the separator
   bool hasStatus = dispStatus[0] != '\0';
@@ -515,8 +464,6 @@ static void applyDisplayDoc(JsonDocument& doc) {
     dispShowTimer = false;
     dispTimerRunning = false;
     dispMessage[0] = '\0';
-    dispArrow[0] = '\0';
-    dispLayout[0] = '\0';
     return;
   }
 
@@ -527,13 +474,7 @@ static void applyDisplayDoc(JsonDocument& doc) {
   strncpy(dispStatus, status, sizeof(dispStatus) - 1);
   dispStatus[sizeof(dispStatus) - 1] = '\0';
 
-  const char* arrow = doc["arrow"] | "";
-  strncpy(dispArrow, arrow, sizeof(dispArrow) - 1);
-  dispArrow[sizeof(dispArrow) - 1] = '\0';
 
-  const char* layout = doc["layout"] | "";
-  strncpy(dispLayout, layout, sizeof(dispLayout) - 1);
-  dispLayout[sizeof(dispLayout) - 1] = '\0';
 
   if (doc["round"].is<int>()) {
     dispShowRound = true;
@@ -568,10 +509,6 @@ void applyPendingDisplay() {
   dispStatus[sizeof(dispStatus) - 1] = '\0';
   strncpy(dispMessage, pendingDisplay.message, sizeof(dispMessage) - 1);
   dispMessage[sizeof(dispMessage) - 1] = '\0';
-  strncpy(dispArrow,   pendingDisplay.arrow,   sizeof(dispArrow)   - 1);
-  dispArrow[sizeof(dispArrow) - 1] = '\0';
-  strncpy(dispLayout,  pendingDisplay.layout,  sizeof(dispLayout)  - 1);
-  dispLayout[sizeof(dispLayout) - 1] = '\0';
   dispCanvas       = pendingDisplay.canvas;
   dispShowRound    = pendingDisplay.showRound;
   dispRound        = pendingDisplay.round;
@@ -596,12 +533,6 @@ void handleDisplayCommand(JsonDocument& doc) {
     const char* message = doc["message"] | "";
     strncpy(pendingDisplay.message, message, sizeof(pendingDisplay.message) - 1);
     pendingDisplay.message[sizeof(pendingDisplay.message) - 1] = '\0';
-    const char* parrow = doc["arrow"] | "";
-    strncpy(pendingDisplay.arrow, parrow, sizeof(pendingDisplay.arrow) - 1);
-    pendingDisplay.arrow[sizeof(pendingDisplay.arrow) - 1] = '\0';
-    const char* playout = doc["layout"] | "";
-    strncpy(pendingDisplay.layout, playout, sizeof(pendingDisplay.layout) - 1);
-    pendingDisplay.layout[sizeof(pendingDisplay.layout) - 1] = '\0';
     pendingDisplay.showRound    = doc["round"].is<int>();
     pendingDisplay.round        = doc["round"] | 0;
     pendingDisplay.showTimer    = doc["timerRunning"].is<bool>();
