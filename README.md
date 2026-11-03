@@ -4,6 +4,56 @@ Firmware for Herald LED game boxes (ESP32). Boxes self-elect a hub via mDNS and 
 
 ---
 
+## Checks before release
+
+Pull requests, branch pushes, and manual runs of **Check Firmware** run the LED
+sector tests and compile `esp32dev-release` without publishing a release. The tag
+release workflow runs the same tests before building and publishing its binary.
+
+The sector tests also run locally with Python 3 and a desktop C++ compiler; no
+PlatformIO installation or connected box is needed:
+
+```bash
+python3 scripts/test_led_sectors.py
+```
+
+These tests exercise the production sector-expansion helper. A complete firmware
+build additionally checks its ArduinoJson/FastLED integration. Neither replaces
+testing the firmware on physical boxes.
+
+## Repeating LED sectors
+
+The next patch release, **3.5.1**, adds optional `repeat: true` to `led_sectors`:
+
+```json
+{
+  "type": "led_sectors",
+  "hwid": "AA:BB:CC:DD:EE:FF",
+  "repeat": true,
+  "sectors": [
+    { "color": "#ffffff", "count": 1 },
+    { "color": "#4444ff", "count": 3 }
+  ]
+}
+```
+
+This repeats one white LED and three blue LEDs around the ring. Any sequence of
+colours and positive counts can repeat; the final sector is clipped at the end
+of the ring. Nonpositive counts are skipped. Empty patterns, or patterns with no
+positive counts, leave the ring off. Omitting `repeat` keeps the existing single
+pass and leaves any unused LEDs off.
+
+The example is 135 bytes when compactly serialized, below the 250-byte ESP-NOW
+limit. Explicitly listing all six copies would be 421 bytes.
+
+Older firmware ignores `repeat`, so the web app uses compact alternating pairs
+for speaker patterns on versions below 3.5.1 or when the version is unknown.
+Virtual boxes preview the full repeating pattern. The version in
+`platformio.ini` is bumped by the release process; this change does not create
+or publish a release.
+
+---
+
 ## Releasing a new version
 
 ### Using the release script

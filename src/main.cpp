@@ -1,5 +1,6 @@
 #include "globals.h"
 #include <FastLED.h>
+#include "led-sectors.h"
 
 // ---- Shared global definitions ----
 
@@ -476,13 +477,12 @@ static void applyLedSectors(JsonDocument& doc) {
   stopLedAnim();
   FastLED.clear();
   JsonArray sectors = doc["sectors"].as<JsonArray>();
-  int pos = 0;
-  for (JsonObject sector : sectors) {
-    CRGB c = parseHexColor(sector["color"] | "#000000");
-    int count = sector["count"] | 0;
-    for (int i = 0; i < count && pos < LED_RING_COUNT; i++, pos++)
-      ledRing[pos] = c;
-  }
+  paintLedSectors(sectors, LED_RING_COUNT, doc["repeat"] | false,
+    [](JsonObject sector) { return sector["count"] | 0; },
+    [](int start, int count, JsonObject sector) {
+      CRGB c = parseHexColor(sector["color"] | "#000000");
+      for (int i = start; i < start + count; i++) ledRing[i] = c;
+    });
   FastLED.show();
 }
 

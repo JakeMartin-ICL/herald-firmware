@@ -365,12 +365,8 @@ void onClientEvent(WStype_t type, uint8_t* payload, size_t length) {
 
       if (strcmp(msgType, "assigned") == 0) {
         debugLog("Confirmed hwid: " + myHwId);
-      } else if (strcmp(msgType, "led") == 0) {
-        handleLedCommand(doc);
-      } else if (strcmp(msgType, "led_anim") == 0) {
-        handleLedAnim(doc);
-      } else if (strcmp(msgType, "led_anim_stop") == 0) {
-        stopLedAnim();
+      } else if (strncmp(msgType, "led", 3) == 0) {
+        handleLedPatternCommand(doc);
       } else if (strcmp(msgType, "display") == 0) {
         handleDisplayCommand(doc);
       } else if (strcmp(msgType, "ota_update") == 0) {

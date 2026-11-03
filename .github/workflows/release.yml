@@ -18,7 +18,7 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes from commits
         id: notes
@@ -29,10 +29,12 @@ jobs:
           else
             RANGE="${GITHUB_REF_NAME}^"
           fi
-          NOTES=$(git log $RANGE --pretty=format:"- %s" --no-merges)
-          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          NOTES=$(git log "$RANGE" --pretty=format:"- %s" --no-merges)
+          {
+            echo "NOTES<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,6 +43,9 @@ jobs:
 
       - name: Install PlatformIO
         run: pip install platformio
+
+      - name: Test LED sector expansion
+        run: python3 scripts/test_led_sectors.py
 
       - name: Patch version in platformio.ini
         run: |
