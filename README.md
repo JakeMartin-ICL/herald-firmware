@@ -21,6 +21,10 @@ These tests exercise the production sector-expansion helper. A complete firmware
 build additionally checks its ArduinoJson/FastLED integration. Neither replaces
 testing the firmware on physical boxes.
 
+All environments pin `espressif32@6.12.0` (Arduino 2.0.17), which matches the
+ESP-NOW callback API used by this firmware. Update that pin deliberately when
+migrating the radio callbacks; leaving it unpinned can break fresh builds.
+
 ## Repeating LED sectors
 
 The next patch release, **3.5.1**, adds optional `repeat: true` to `led_sectors`:
