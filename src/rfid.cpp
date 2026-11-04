@@ -16,36 +16,6 @@ static MFRC522::Uid rfidWriteUid = {};
 static const uint32_t RFID_WRITE_WINDOW_MS = 1800;
 static const uint32_t RFID_WRITE_RETRY_MS = 90;
 
-enum class RfidReadRecovery { NONE, FIELD_OFF, FIELD_SETTLING };
-static RfidReadRecovery rfidReadRecovery = RfidReadRecovery::NONE;
-static uint32_t rfidReadRecoveryChangedMs = 0;
-// NXP AN12057 table 1 requires >=5.1 ms off, then >=5.1 ms on before
-// activation. Use 10 ms for each phase, allowing for millis() resolution.
-static const uint32_t RFID_READ_FIELD_WAIT_MS = 10;
-
-static void recoverFailedRfidRead(const String& error) {
-  debugLog("RFID read failed; cycling field: " + error);
-  rfid.PCD_StopCrypto1();
-  rfid.PCD_AntennaOff();
-  rfidReadRecovery = RfidReadRecovery::FIELD_OFF;
-  rfidReadRecoveryChangedMs = millis();
-}
-
-// Run even when scanning is disabled so we always restore the antenna.
-// A write requested during recovery waits for the field to settle too.
-static bool tickRfidReadRecovery() {
-  if (rfidReadRecovery == RfidReadRecovery::NONE) return false;
-  if ((uint32_t)(millis() - rfidReadRecoveryChangedMs) < RFID_READ_FIELD_WAIT_MS) return true;
-  if (rfidReadRecovery == RfidReadRecovery::FIELD_OFF) {
-    rfid.PCD_AntennaOn();
-    rfidReadRecovery = RfidReadRecovery::FIELD_SETTLING;
-    rfidReadRecoveryChangedMs = millis();
-    return true;
-  }
-  rfidReadRecovery = RfidReadRecovery::NONE;
-  return false;
-}
-
 static void resetRfidReader() {
   rfid.PCD_Reset();
   delay(4);
@@ -87,30 +57,28 @@ static bool rfidAuth(String* error = nullptr) {
 
 // Read up to 32 bytes from blocks 1-2 of sector 0 into `out`.
 // Returns false if auth or any read fails.
-static bool rfidReadContent(String& out, String& error) {
-  if (!rfidAuth(&error)) return false;
+static bool rfidReadContent(String& out) {
+  if (!rfidAuth()) return false;
 
   char raw[33] = {};
-  byte buf[18] = {};
+  byte buf[18];
   byte bufSize;
   MFRC522::StatusCode s;
 
   bufSize = sizeof(buf);
   s = rfid.MIFARE_Read(1, buf, &bufSize);
-  if (s != MFRC522::STATUS_OK || bufSize != sizeof(buf)) {
-    error = s == MFRC522::STATUS_OK ? String("Read block 1 incomplete") : rfidStatusError("Read block 1 failed", s);
+  if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: read block 1 failed: ");
-    Serial.println(error);
+    Serial.println(rfid.GetStatusCodeName(s));
     return false;
   }
   memcpy(raw, buf, 16);
 
   bufSize = sizeof(buf);
   s = rfid.MIFARE_Read(2, buf, &bufSize);
-  if (s != MFRC522::STATUS_OK || bufSize != sizeof(buf)) {
-    error = s == MFRC522::STATUS_OK ? String("Read block 2 incomplete") : rfidStatusError("Read block 2 failed", s);
+  if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: read block 2 failed: ");
-    Serial.println(error);
+    Serial.println(rfid.GetStatusCodeName(s));
     return false;
   }
   memcpy(raw + 16, buf, 16);
@@ -254,7 +222,6 @@ static void processPendingRfidWrite() {
 
 // Called from loop() - detect new tags, read their content, forward as rfid message.
 void loopRfid() {
-  if (tickRfidReadRecovery()) return;
   if (!rfidEnabled) return;
 
   if (rfidWritePending) {
@@ -262,20 +229,14 @@ void loopRfid() {
     return;
   }
 
-  if (!rfid.PICC_IsNewCardPresent()) return;
-  if (!rfid.PICC_ReadCardSerial()) {
-    recoverFailedRfidRead("Card selection failed");
-    return;
-  }
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
 
   String content;
-  String readError;
-  if (!rfidReadContent(content, readError)) {
-    recoverFailedRfidRead(readError);
-    return;
-  }
+  bool ok = rfidReadContent(content);
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
+
+  if (!ok) return;
 
   // Sanitise: non-ASCII bytes in a WebSocket text frame cause the browser to close
   // the connection. Replace any such bytes so the message is always valid UTF-8.
@@ -323,8 +284,6 @@ void handleRfidWrite(const char* internalId) {
   rfidWriteLastError = "";
   rfidWriteUid.size = 0;
 
-  // A recovering card is already being power-cycled; do not transmit HALT
-  // during its field-off/boot interval. loopRfid waits before the write starts.
-  if (rfidReadRecovery == RfidReadRecovery::NONE) rfid.PICC_HaltA();
+  rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 }
