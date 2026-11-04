@@ -22,6 +22,21 @@ These tests exercise the production sector-expansion helper. A complete firmware
 build additionally checks its ArduinoJson/FastLED integration. Neither replaces
 testing the firmware on physical boxes.
 
+## LED ring power limit
+
+The firmware sets a 4,000 mW estimated power budget in `initLedRing()` before
+the first LED output. FastLED applies this budget on every `show()`, covering
+solid colours, sectors, animations, countdowns and OTA indicators. The configured
+brightness remains the requested maximum; demanding frames are dimmed uniformly
+without changing the saved setting, and lighter frames can remain brighter.
+
+The budget targets roughly 75–80% output for all 24 LEDs showing full white,
+based on FastLED's power model. It was chosen conservatively below the observed
+battery-powered reboot threshold near 90% full-white brightness. This is an
+estimate rather than measured consumption; battery testing is still needed to
+confirm the margin, including at lower charge. The budget can be adjusted via
+`LED_RING_POWER_LIMIT_MW` in `src/main.cpp`.
+
 ## RFID writing (3.5.1)
 
 Hold the tag on the reader until the app says Written, then remove it. Writing

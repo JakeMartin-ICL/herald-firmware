@@ -221,6 +221,9 @@ void setLed(bool on) {
 // ---- LED ring ----
 
 static CRGB ledRing[LED_RING_COUNT];
+// Estimated ring power budget: caps full white at roughly 75–80% brightness
+// while allowing less demanding patterns to use the requested brightness.
+static constexpr uint32_t LED_RING_POWER_LIMIT_MW = 4000;
 
 // Gamma-2.2 lookup table: converts linear sRGB (0–255) to LED PWM (0–255).
 // WS2812B output is linear; sRGB colours assume a ~2.2 gamma display.
@@ -266,6 +269,7 @@ static CRGB parseHexColor(const char* hex) {
 
 void initLedRing() {
   FastLED.addLeds<WS2812B, LED_RING_PIN, GRB>(ledRing, LED_RING_COUNT);
+  FastLED.setMaxPowerInMilliWatts(LED_RING_POWER_LIMIT_MW);
   FastLED.setBrightness(ledBrightness);
   FastLED.clear(true);
 }
