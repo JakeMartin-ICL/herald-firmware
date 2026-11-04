@@ -7,7 +7,7 @@ Firmware for Herald LED game boxes (ESP32). Boxes self-elect a hub via mDNS and 
 ## Checks before release
 
 Pull requests, branch pushes, and manual runs of **Check Firmware** run the LED
-sector tests and compile `esp32dev-release` without publishing a release. The tag
+sector and RFID transaction tests and compile `esp32dev-release` without publishing a release. The tag
 release workflow runs the same tests before building and publishing its binary.
 
 The sector tests also run locally with Python 3 and a desktop C++ compiler; no
@@ -15,11 +15,35 @@ PlatformIO installation or connected box is needed:
 
 ```bash
 python3 scripts/test_led_sectors.py
+python3 scripts/test_rfid.py
 ```
 
 These tests exercise the production sector-expansion helper. A complete firmware
 build additionally checks its ArduinoJson/FastLED integration. Neither replaces
 testing the firmware on physical boxes.
+
+## RFID writing (3.5.1)
+
+Hold the tag on the reader until the app says Written, then remove it. Writing
+uses the existing two data blocks and the existing 1.8-second retry window.
+Every attempt now completes wake-up, selection, authentication, writes and
+read-back verification in order. It no longer repeatedly probes a woken card
+during a settling interval: those probes change the card's protocol state and
+could end with "No card in field" without attempting a write.
+
+The card is halted before Crypto1 is stopped, including after read/write errors.
+A write succeeds only after both blocks match the requested ID and zero padding.
+Retries stay bound to the first selected tag's UID, so a partial write cannot
+continue on a different tag. Errors identify wake-up, selection, authentication,
+write or verification failures instead of implying the tag needs replacing.
+Only data blocks 1 and 2 are written; UID, keys and access bits are untouched.
+
+`test_rfid.py` compiles the production `src/rfid.cpp` against a stateful card
+model. It covers a held tag after a normal read, absent/late tags, transient and
+permanent failures at each transaction stage, read-back mismatches, card swaps,
+payload boundaries, normal reading, and timer wraparound. The held-tag case
+reproduced the old zero-write timeout before this fix. These are protocol-model
+tests, not a claim of physical-reader validation.
 
 All environments pin `espressif32@6.12.0` (Arduino 2.0.17), which matches the
 ESP-NOW callback API used by this firmware. Update that pin deliberately when
@@ -27,7 +51,7 @@ migrating the radio callbacks; leaving it unpinned can break fresh builds.
 
 ## Repeating LED sectors
 
-The next patch release, **3.5.1**, adds optional `repeat: true` to `led_sectors`:
+Release **3.5.1** adds optional `repeat: true` to `led_sectors`:
 
 ```json
 {

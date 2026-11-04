@@ -8,13 +8,12 @@ MFRC522::MIFARE_Key rfidKey;
 static bool     rfidWritePending = false;
 static char     rfidPendingContent[32] = {};
 static uint32_t rfidWriteRequestedMs = 0;
-static uint32_t rfidWriteSeenMs = 0;
 static uint32_t rfidWriteLastAttemptMs = 0;
 static uint8_t  rfidWriteAttempts = 0;
 static String   rfidWriteLastError;
+static MFRC522::Uid rfidWriteUid = {};
 
 static const uint32_t RFID_WRITE_WINDOW_MS = 1800;
-static const uint32_t RFID_WRITE_SETTLE_MS = 120;
 static const uint32_t RFID_WRITE_RETRY_MS = 90;
 
 static void resetRfidReader() {
@@ -40,13 +39,18 @@ void initRfid() {
 }
 
 // Authenticate sector 0 with the default factory key (all 0xFF).
-static bool rfidAuth() {
+static String rfidStatusError(const char* stage, MFRC522::StatusCode status) {
+  return String(stage) + ": " + rfid.GetStatusCodeName(status);
+}
+
+static bool rfidAuth(String* error = nullptr) {
   for (byte i = 0; i < 6; i++) rfidKey.keyByte[i] = 0xFF;
   MFRC522::StatusCode s = rfid.PCD_Authenticate(
     MFRC522::PICC_CMD_MF_AUTH_KEY_A, 3, &rfidKey, &rfid.uid);
   if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID auth failed: ");
     Serial.println(rfid.GetStatusCodeName(s));
+    if (error) *error = rfidStatusError("Authentication failed", s);
   }
   return s == MFRC522::STATUS_OK;
 }
@@ -66,7 +70,6 @@ static bool rfidReadContent(String& out) {
   if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: read block 1 failed: ");
     Serial.println(rfid.GetStatusCodeName(s));
-    rfid.PCD_StopCrypto1();
     return false;
   }
   memcpy(raw, buf, 16);
@@ -76,7 +79,6 @@ static bool rfidReadContent(String& out) {
   if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: read block 2 failed: ");
     Serial.println(rfid.GetStatusCodeName(s));
-    rfid.PCD_StopCrypto1();
     return false;
   }
   memcpy(raw + 16, buf, 16);
@@ -91,10 +93,7 @@ static bool rfidReadContent(String& out) {
 // Write a null-terminated string into blocks 1-2 of sector 0 (max 31 chars).
 // Returns true on success; sets errOut and returns false on failure.
 static bool rfidWriteContent(const char* content, String& errOut) {
-  if (!rfidAuth()) {
-    errOut = "Auth failed - tag may need replacing";
-    return false;
-  }
+  if (!rfidAuth(&errOut)) return false;
 
   byte block1[16] = {};
   byte block2[16] = {};
@@ -110,19 +109,33 @@ static bool rfidWriteContent(const char* content, String& errOut) {
   if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: write block 1 failed: ");
     Serial.println(rfid.GetStatusCodeName(s));
-    rfid.PCD_StopCrypto1();
-    errOut = "Write failed (block 1)";
+    errOut = rfidStatusError("Write block 1 failed", s);
     return false;
   }
   s = rfid.MIFARE_Write(2, block2, 16);
   if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: write block 2 failed: ");
     Serial.println(rfid.GetStatusCodeName(s));
-    rfid.PCD_StopCrypto1();
-    errOut = "Write failed (block 2)";
+    errOut = rfidStatusError("Write block 2 failed", s);
     return false;
   }
-  rfid.PCD_StopCrypto1();
+  // A write ACK alone does not prove the stored ID is correct. Verify both
+  // blocks, including padding, before telling the app to advance to the next tag.
+  const byte* expected[] = {block1, block2};
+  for (byte block = 1; block <= 2; block++) {
+    byte actual[18];
+    byte size = sizeof(actual);
+    s = rfid.MIFARE_Read(block, actual, &size);
+    if (s != MFRC522::STATUS_OK) {
+      errOut = rfidStatusError(block == 1 ? "Verify block 1 failed" : "Verify block 2 failed", s);
+      return false;
+    }
+    if (memcmp(actual, expected[block - 1], 16) != 0) {
+      errOut = block == 1 ? "Verify block 1 mismatch" : "Verify block 2 mismatch";
+      return false;
+    }
+  }
+  // The caller sends HALT while Crypto1 is still active, then stops Crypto1.
   return true;
 }
 
@@ -131,16 +144,18 @@ static void finishPendingRfidWrite(bool success, const String& error = "") {
   resp["type"] = "rfid_write_result";
   resp["hwid"] = myHwId;
   resp["success"] = success;
+  if (success) resp["verified"] = true;
+  resp["attempts"] = rfidWriteAttempts;
   if (!success && error.length() > 0) resp["error"] = error;
   forwardToApp(resp);
 
   rfidWritePending = false;
   rfidPendingContent[0] = '\0';
   rfidWriteRequestedMs = 0;
-  rfidWriteSeenMs = 0;
   rfidWriteLastAttemptMs = 0;
   rfidWriteAttempts = 0;
   rfidWriteLastError = "";
+  rfidWriteUid.size = 0;
 }
 
 static void processPendingRfidWrite() {
@@ -148,37 +163,48 @@ static void processPendingRfidWrite() {
 
   uint32_t now = millis();
   if ((now - rfidWriteRequestedMs) >= RFID_WRITE_WINDOW_MS) {
-    finishPendingRfidWrite(false, rfidWriteAttempts == 0 ? "No card in field" : rfidWriteLastError);
+    finishPendingRfidWrite(false, rfidWriteLastError);
     return;
   }
+
+  if (rfidWriteAttempts > 0 && (now - rfidWriteLastAttemptMs) < RFID_WRITE_RETRY_MS) return;
+  rfidWriteLastAttemptMs = now;
+  rfidWriteAttempts++;
 
   byte atqa[2];
   byte atqaSize = sizeof(atqa);
-  bool cardPresent = (rfid.PICC_WakeupA(atqa, &atqaSize) == MFRC522::STATUS_OK)
-                  || rfid.PICC_IsNewCardPresent();
-
-  if (!cardPresent) {
-    rfidWriteSeenMs = 0;
-    return;
-  }
-
-  if (rfidWriteSeenMs == 0) rfidWriteSeenMs = now;
-  if ((now - rfidWriteSeenMs) < RFID_WRITE_SETTLE_MS) return;
-  if ((now - rfidWriteLastAttemptMs) < RFID_WRITE_RETRY_MS) return;
-
-  rfidWriteLastAttemptMs = now;
-  rfidWriteAttempts++;
-  debugLog("RFID write attempt " + String(rfidWriteAttempts));
-
-  if (!rfid.PICC_ReadCardSerial()) {
-    rfidWriteLastError = "Card detected but UID read failed";
+  rfid.PCD_StopCrypto1();
+  const MFRC522::StatusCode wakeStatus = rfid.PICC_WakeupA(atqa, &atqaSize);
+  if (wakeStatus != MFRC522::STATUS_OK && wakeStatus != MFRC522::STATUS_COLLISION) {
+    // Preserve a more informative select/auth/write/verify error on later
+    // timeouts instead of replacing it with "No card in field".
+    if (rfidWriteLastError.length() == 0) {
+      rfidWriteLastError = rfidStatusError("No tag answered wake-up; keep tag on reader", wakeStatus);
+    }
     resetRfidReader();
     return;
   }
 
-  // Give the PICC a brief moment to settle after anticollision/select before
-  // starting authenticated writes. Reads can succeed while auth/write still fail.
-  delay(20);
+  // WUPA changes the card to READY/READY*. SELECT must follow immediately.
+  // Repeating wake-up/presence probes during a settling interval changes that
+  // protocol state and can prevent a write from ever being attempted.
+  debugLog("RFID write attempt " + String(rfidWriteAttempts));
+
+  const MFRC522::StatusCode selectStatus = rfid.PICC_Select(&rfid.uid);
+  if (selectStatus != MFRC522::STATUS_OK) {
+    rfidWriteLastError = rfidStatusError("Card selection failed", selectStatus);
+    resetRfidReader();
+    return;
+  }
+
+  // A retry after a partial write must never continue on a different tag.
+  if (rfidWriteUid.size == 0) rfidWriteUid = rfid.uid;
+  else if (rfidWriteUid.size != rfid.uid.size || memcmp(rfidWriteUid.uidByte, rfid.uid.uidByte, rfid.uid.size) != 0) {
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+    finishPendingRfidWrite(false, "Different tag detected during retry; present the original tag again");
+    return;
+  }
 
   String writeErr;
   bool ok = rfidWriteContent(rfidPendingContent, writeErr);
@@ -243,16 +269,20 @@ void loopRfid() {
 }
 
 // Called when the hub receives an rfid_write command from the app.
-// Queue a short retry window so writes can wait for the tag to settle in the field.
+// Retry complete wake/select/auth/write/verify transactions while the tag is held.
 void handleRfidWrite(const char* internalId) {
+  if (!internalId || strlen(internalId) == 0 || strlen(internalId) >= sizeof(rfidPendingContent)) {
+    finishPendingRfidWrite(false, "Tag ID must contain 1 to 31 characters");
+    return;
+  }
   strncpy(rfidPendingContent, internalId, sizeof(rfidPendingContent) - 1);
   rfidPendingContent[sizeof(rfidPendingContent) - 1] = '\0';
   rfidWritePending = true;
   rfidWriteRequestedMs = millis();
-  rfidWriteSeenMs = 0;
   rfidWriteLastAttemptMs = 0;
   rfidWriteAttempts = 0;
-  rfidWriteLastError = "Write failed";
+  rfidWriteLastError = "";
+  rfidWriteUid.size = 0;
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();

@@ -47,6 +47,9 @@ jobs:
       - name: Test LED sector expansion
         run: python3 scripts/test_led_sectors.py
 
+      - name: Test RFID transactions
+        run: python3 scripts/test_rfid.py
+
       - name: Patch version in platformio.ini
         run: |
           sed -i "s/-DFIRMWARE_VERSION=.*/-DFIRMWARE_VERSION='\"${{ steps.version.outputs.VERSION }}\"'/" platformio.ini
