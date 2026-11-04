@@ -56,14 +56,39 @@ only when detection succeeds. It does not select after a detection timeout or
 reset the reader after read/detection errors. Successful reads still halt the
 tag to suppress duplicates; different tags have no programmed cooldown.
 
-The original failed-read recovery limitation remains: a tag may need to be
-removed and presented again after a failed read. A replacement recovery approach
-needs hardware validation before release. The protocol model used for 3.5.2 did
-not capture the timing and RF behaviour behind the reported regression.
+This rollback restored the original failed-read recovery limitation, addressed
+separately in 3.5.4 below. The protocol model used for 3.5.2 did not capture the
+timing and RF behaviour behind the reported regression.
 
 Regression checks cover absent and held tags without extra selection/reset
 commands, consecutive different tags, and the existing writing flows. Update
 all scanning boxes running 3.5.2 to restore the previous reading implementation.
+
+## Targeted RFID read recovery (3.5.4)
+
+Normal new-card detection and successful-read handling stay as in 3.5.1/3.5.3.
+An unanswered presence probe never causes extra selection commands or resets.
+Only a confirmed selection, authentication or block-read failure starts recovery.
+Incomplete block replies are also treated as failed reads.
+
+Recovery stops Crypto1 and switches only the antenna off for at least 10 ms,
+then on for at least 10 ms before retrying the original detection path. Both waits use `millis()`;
+the main loop continues servicing the app, buttons and LEDs. No reader-chip reset
+or reinitialization runs in this read-recovery path. The durations include margin
+over the 5.1 ms off/on intervals in [NXP AN12057, table 1](https://www.nxp.com/docs/en/application-note/AN12057.pdf).
+Successful reads still use HALT to suppress duplicates without cycling the field.
+
+The antenna is restored even if scanning is disabled during recovery. A write
+requested during recovery waits until the field has settled; the existing write
+transaction and read-back verification are unchanged. Existing debug logging now
+reports whether recovery followed selection, authentication or a block-read error.
+
+The card model includes 25 ms unanswered-command timeouts, chip reset/init delays,
+and checks against premature activation after an explicit RF cycle. Tests cover
+held-tag retries at each failure stage, short replies, normal empty/held polling,
+replacement tags, removal, disable/enable, writes during recovery, and clock
+wraparound. These tests check software sequencing and timing, not RF signal
+quality: the release still needs testing on the physical boxes via OTA.
 
 All environments pin `espressif32@6.12.0` (Arduino 2.0.17), which matches the
 ESP-NOW callback API used by this firmware. Update that pin deliberately when

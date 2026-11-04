@@ -6,13 +6,19 @@ SpiMock SPI;
 bool isHub = true, rfidEnabled = true;
 String myHwId = "AA:BB:CC:DD:EE:FF";
 std::vector<JsonDocument> messages;
+std::vector<std::string> debugMessages;
 
 static void reset() {
+  rfidEnabled = false;
+  // Let an outstanding field cycle restore the antenna, using only public APIs.
+  for (int i = 0; i < 3; ++i) { clockMs += 100; loopRfid(); }
   finishPendingRfidWrite(false);
   messages.clear();
+  debugMessages.clear();
   clockMs = 1000;
   rfid = MFRC522(RFID_SS_PIN, RFID_RST_PIN);
   rfidEnabled = true;
+  isHub = true;
 }
 
 static JsonDocument runWrite(const char* id = "ti:tile:42") {
@@ -58,7 +64,8 @@ static void noCard() {
 static void cardArrivesLater() {
   reset(); rfid.present = false;
   handleRfidWrite("ti:tile:42");
-  for (int i = 0; i < 30; ++i) { clockMs += 10; loopRfid(); }
+  const uint32_t requested = clockMs;
+  while (clockMs - requested < 300) { clockMs += 10; loopRfid(); }
   assert(rfidWritePending);
   assert(rfid.writeCalls == 0);
   rfid.present = true;
@@ -148,8 +155,19 @@ static void readingStillWorks() {
   loopRfid();
   assert(messages.empty());
   assert(!rfid.crypto);
-  assert(rfid.cardState == MFRC522::CardState::HALT);
+  assert(!rfid.antennaOn);
+  assert(rfid.resetCalls == 0);
   assert(rfid.badHalts == 0);
+}
+
+static void failedHeldTagEventuallyReads() {
+  reset(); rfid.readFailures = 1;
+  std::memcpy(rfid.memory[1].data(), "ti:tile:42", 10);
+  loopRfid();
+  assert(messages.empty());
+  for (int i = 0; i < 100 && messages.empty(); ++i) { ++clockMs; loopRfid(); }
+  assert(messages.size() == 1); // Same physical tag; never removed/re-presented.
+  assert(messages.back()["tagId"].text == "ti:tile:42");
 }
 
 static void timerWraparound() {
@@ -160,7 +178,9 @@ static void timerWraparound() {
 
 static void normalPollingDoesNotSelectOrResetIdleReaders() {
   reset(); rfid.present = false;
+  const uint32_t start = clockMs;
   for (int i = 0; i < 100; ++i) loopRfid();
+  assert(clockMs - start == 2500); // Exactly the original REQA timeout per poll.
   assert(messages.empty());
   assert(rfid.selectCalls == 0); // Do not add a SELECT timeout to each empty poll.
   assert(rfid.resetCalls == 0);
@@ -174,6 +194,7 @@ static void normalPollingDoesNotSelectOrResetIdleReaders() {
   assert(rfid.selectCalls == 1); // A held, successfully halted tag stays quiet.
   assert(rfid.resetCalls == 0);
   assert(rfid.writeCalls == 0);
+  assert(rfid.fieldOffCalls == 0 && rfid.fieldOnCalls == 0);
 }
 
 static void differentTagsHaveNoReadCooldown() {
@@ -190,6 +211,125 @@ static void differentTagsHaveNoReadCooldown() {
   assert(messages.back()["tagId"].text == "ti:tile:43");
 }
 
+static void waitForReadRecovery(uint32_t elapsed) {
+  clockMs += elapsed;
+  const uint32_t before = clockMs;
+  loopRfid();
+  assert(clockMs == before); // Waiting phases must yield, never sleep or transact.
+}
+
+static void failedReadsRetryHeldTags() {
+  for (int kind = 0; kind < 6; ++kind) {
+    reset();
+    isHub = kind % 2 == 0; // Both local and client forwarding paths.
+    std::memcpy(rfid.memory[1].data(), "ti:tile:42", 10);
+    if (kind == 0) rfid.selectFailures = 1;
+    if (kind == 1) rfid.authFailures = 1;
+    if (kind == 2) rfid.readFailures = 1;
+    if (kind == 3) rfid.block2ReadFailures = 1;
+    if (kind == 4 || kind == 5) { rfid.shortReads = 1; rfid.shortReadBlock = kind - 3; }
+    loopRfid();
+    assert(messages.empty());
+    assert(!rfid.antennaOn && !rfid.crypto);
+    assert(rfid.fieldOffCalls == 1 && rfid.resetCalls == 0);
+    const char* errors[] = {"selection", "Authentication", "Read block 1", "Read block 2", "Read block 1 incomplete", "Read block 2 incomplete"};
+    assert(debugMessages.back().find(errors[kind]) != std::string::npos);
+    const int probes = rfid.presenceCalls;
+    const uint32_t failedAt = clockMs;
+    waitForReadRecovery(9);
+    assert(!rfid.antennaOn);
+    waitForReadRecovery(1);
+    assert(rfid.antennaOn);
+    waitForReadRecovery(9);
+    assert(messages.empty() && rfid.presenceCalls == probes);
+    ++clockMs;
+    loopRfid();
+    assert(messages.size() == 1);
+    assert(messages.back()["tagId"].text == "ti:tile:42");
+    assert(clockMs - failedAt == 50); // 20 ms field cycle + model's 30 ms normal read.
+    assert(rfid.fieldOnCalls == 1 && rfid.earlyActivations == 0);
+    assert(rfid.resetCalls == 0 && rfid.writeCalls == 0 && rfid.badHalts == 0);
+    for (int i = 0; i < 100; ++i) loopRfid();
+    assert(messages.size() == 1); // No field cycles/duplicates after success.
+    assert(rfid.fieldOffCalls == 1 && rfid.fieldOnCalls == 1);
+  }
+}
+
+static void swappingTagsDuringRecovery() {
+  reset(); rfid.authFailures = 1;
+  std::memcpy(rfid.memory[1].data(), "ti:tile:42", 10);
+  loopRfid();
+  assert(messages.empty());
+  rfid.cardNumber = 2;
+  std::memcpy(rfid.memory[1].data(), "ti:tile:43", 10);
+  for (int i = 0; i < 30 && messages.empty(); ++i) { ++clockMs; loopRfid(); }
+  assert(messages.size() == 1);
+  assert(messages.back()["tagId"].text == "ti:tile:43");
+  assert(rfid.earlyActivations == 0 && rfid.resetCalls == 0);
+}
+
+static void disablingDuringRecoveryRestoresAntenna() {
+  reset(); rfid.authFailures = 1;
+  loopRfid();
+  rfidEnabled = false;
+  const int selects = rfid.selectCalls;
+  waitForReadRecovery(10);
+  assert(rfid.antennaOn);
+  waitForReadRecovery(10);
+  assert(messages.empty() && rfid.selectCalls == selects);
+  rfidEnabled = true;
+  loopRfid();
+  assert(messages.size() == 1 && messages.back()["tagId"].text.empty());
+  assert(rfid.earlyActivations == 0 && rfid.resetCalls == 0);
+}
+
+static void writingDuringRecoveryWaitsForField() {
+  for (bool settling : {false, true}) {
+    reset(); rfid.authFailures = 1;
+    loopRfid();
+    if (settling) waitForReadRecovery(10);
+    const uint32_t before = clockMs;
+    handleRfidWrite("ti:tile:42");
+    loopRfid();
+    assert(clockMs == before);
+    assert(rfid.writeCalls == 0 && rfid.wakeCalls == 0);
+    for (int i = 0; i < 100 && rfidWritePending; ++i) { ++clockMs; loopRfid(); }
+    assert(!rfidWritePending);
+    assert(messages.size() == 1 && messages.back()["verified"].boolean);
+    assert(rfid.writeCalls == 2);
+    assert(rfid.earlyActivations == 0 && rfid.resetCalls == 0);
+  }
+}
+
+static void persistentFailuresAndReaderRemoval() {
+  reset(); rfid.authFailures = 1000;
+  for (int i = 0; i < 100; ++i) {
+    ++clockMs;
+    const uint32_t before = clockMs;
+    loopRfid();
+    assert(clockMs - before <= 27); // Only the SDK transaction can block.
+  }
+  assert(messages.empty() && rfid.fieldOffCalls > 1 && rfid.resetCalls == 0);
+  rfid.present = false;
+  for (int i = 0; i < 30; ++i) { ++clockMs; loopRfid(); }
+  const int cycles = rfid.fieldOffCalls;
+  for (int i = 0; i < 10; ++i) loopRfid();
+  assert(rfid.fieldOffCalls == cycles && rfid.antennaOn);
+  rfid.authFailures = 0;
+  rfid.present = true;
+  loopRfid();
+  assert(messages.size() == 1);
+  assert(rfid.earlyActivations == 0);
+}
+
+static void readRecoveryAcrossTimerWraparound() {
+  reset(); clockMs = UINT32_MAX - 40; rfid.authFailures = 1;
+  loopRfid();
+  for (int i = 0; i < 30 && messages.empty(); ++i) { ++clockMs; loopRfid(); }
+  assert(messages.size() == 1);
+  assert(rfid.fieldOffCalls == 1 && rfid.fieldOnCalls == 1 && rfid.earlyActivations == 0);
+}
+
 int main() {
   heldTag();
   noCard();
@@ -198,9 +338,16 @@ int main() {
   permanentFailures();
   changedTagOnRetry();
   payloadBoundaries();
+  failedHeldTagEventuallyReads();
   readingStillWorks();
   timerWraparound();
   normalPollingDoesNotSelectOrResetIdleReaders();
   differentTagsHaveNoReadCooldown();
+  failedReadsRetryHeldTags();
+  swappingTagsDuringRecovery();
+  disablingDuringRecoveryRestoresAntenna();
+  writingDuringRecoveryWaitsForField();
+  persistentFailuresAndReaderRemoval();
+  readRecoveryAcrossTimerWraparound();
   std::cout << "RFID tests passed\n";
 }
