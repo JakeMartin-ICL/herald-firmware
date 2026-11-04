@@ -56,7 +56,7 @@ extern SpiMock SPI;
 class MFRC522 {
 public:
   enum StatusCode { STATUS_OK, STATUS_ERROR, STATUS_COLLISION, STATUS_TIMEOUT };
-  enum PCD_Register { VersionReg };
+  enum PCD_Register { VersionReg, TxModeReg, RxModeReg, ModWidthReg };
   enum { RxGain_max, PICC_CMD_MF_AUTH_KEY_A };
   struct MIFARE_Key { byte keyByte[6]; };
   struct Uid { byte size = 0; byte uidByte[10] = {}; byte sak = 8; };
@@ -68,7 +68,8 @@ public:
   std::array<std::array<byte, 16>, 3> memory = {};
   int wakeCalls = 0, selectCalls = 0, writeCalls = 0, readCalls = 0, badHalts = 0;
   int authFailures = 0, block1Failures = 0, block2Failures = 0;
-  int selectFailures = 0, readFailures = 0, corruptVerifications = 0;
+  int selectFailures = 0, readFailures = 0, block2ReadFailures = 0, shortReads = 0, corruptVerifications = 0;
+  int requestErrors = 0, lostRequestReplies = 0;
   bool wroteBlock2 = false, swapOnBlock2Failure = false;
 
   MFRC522(int, int) {}
@@ -76,6 +77,7 @@ public:
   void PCD_Reset() { cardState = CardState::IDLE; authenticated = false; crypto = false; }
   void PCD_SetAntennaGain(int) {}
   byte PCD_ReadRegister(PCD_Register) { return 0x92; }
+  void PCD_WriteRegister(PCD_Register, byte) {}
   void PCD_StopCrypto1() { crypto = false; }
   static const char* GetStatusCodeName(StatusCode status) {
     return status == STATUS_TIMEOUT ? "Timeout in communication" : "Error in communication";
@@ -86,10 +88,17 @@ public:
     cardState = CardState::READY;
     return STATUS_OK;
   }
-  bool PICC_IsNewCardPresent() {
-    if (!present || cardState != CardState::IDLE) return false;
+  StatusCode PICC_RequestA(byte*, byte*) {
+    if (!present || cardState != CardState::IDLE) return STATUS_TIMEOUT;
     cardState = CardState::READY;
-    return true;
+    if (requestErrors > 0) { --requestErrors; return STATUS_ERROR; }
+    if (lostRequestReplies > 0) { --lostRequestReplies; return STATUS_TIMEOUT; }
+    return STATUS_OK;
+  }
+  bool PICC_IsNewCardPresent() {
+    byte atqa[2], size = sizeof(atqa);
+    const auto status = PICC_RequestA(atqa, &size);
+    return status == STATUS_OK || status == STATUS_COLLISION;
   }
   bool PICC_ReadCardSerial() {
     ++selectCalls;
@@ -143,10 +152,12 @@ public:
     assert(*size >= 18);
     if (!present || cardState != CardState::ACTIVE || !authenticated || !crypto) return STATUS_TIMEOUT;
     if (readFailures > 0) { --readFailures; return STATUS_TIMEOUT; }
+    if (block == 2 && block2ReadFailures > 0) { --block2ReadFailures; return STATUS_TIMEOUT; }
     std::copy(memory[block].begin(), memory[block].end(), data);
     if (wroteBlock2 && corruptVerifications > 0) { --corruptVerifications; data[0] ^= 1; }
     data[16] = data[17] = 0;
     *size = 18;
+    if (shortReads > 0) { --shortReads; *size = 2; }
     return STATUS_OK;
   }
 };

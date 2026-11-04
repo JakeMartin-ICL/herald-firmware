@@ -45,6 +45,26 @@ payload boundaries, normal reading, and timer wraparound. The held-tag case
 reproduced the old zero-write timeout before this fix. These are protocol-model
 tests, not a claim of physical-reader validation.
 
+## RFID read recovery (3.5.2)
+
+Failed presence requests, card selection, authentication or block reads reset
+the reader and RF field so a tag held in place can be retried on the next loop.
+A lost presence response is recovered by attempting selection without resetting
+successfully halted tags. Incomplete block responses are rejected rather than
+interpreted as tag data. Previously a failed
+selection could leave the card in READY, or a failed read could leave it halted,
+so subsequent new-card probes ignored it until it was physically removed.
+
+Successful reads still halt the tag to suppress duplicates while it stays in the
+field. A different tag is accepted without a cooldown. The browser's 1.2-second
+result display does not delay the reader. Update every box being used as a
+scanning station to get the recovery fix.
+
+Protocol tests exercise each failure while the same tag remains in place, then
+check that its successful read is emitted once. They also cover consecutive
+different tags without advancing time, repeated failures, reader disable/enable,
+and the existing write and read-back verification flows.
+
 All environments pin `espressif32@6.12.0` (Arduino 2.0.17), which matches the
 ESP-NOW callback API used by this firmware. Update that pin deliberately when
 migrating the radio callbacks; leaving it unpinned can break fresh builds.

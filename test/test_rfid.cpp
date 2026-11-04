@@ -148,7 +148,7 @@ static void readingStillWorks() {
   loopRfid();
   assert(messages.empty());
   assert(!rfid.crypto);
-  assert(rfid.cardState == MFRC522::CardState::HALT);
+  assert(rfid.cardState == MFRC522::CardState::IDLE);
   assert(rfid.badHalts == 0);
 }
 
@@ -156,6 +156,79 @@ static void timerWraparound() {
   reset(); clockMs = UINT32_MAX - 100;
   rfid.selectFailures = 2;
   assert(runWrite()["verified"].boolean);
+}
+
+static void failedReadsRecoverWhileHeld() {
+  for (int kind = 0; kind < 5; ++kind) {
+    reset();
+    std::memcpy(rfid.memory[1].data(), "ti:tile:42", 10);
+    if (kind == 0) rfid.selectFailures = 1;
+    if (kind == 1) rfid.authFailures = 1;
+    if (kind == 2) rfid.readFailures = 1;
+    if (kind == 3) rfid.block2ReadFailures = 1;
+    if (kind == 4) rfid.shortReads = 1;
+    loopRfid();
+    assert(messages.empty());
+    // Never remove or re-present the tag. A transient failure must retry it.
+    for (int i = 0; i < 100 && messages.empty(); ++i) {
+      clockMs += 10;
+      loopRfid();
+    }
+    std::cerr << "Read recovery stage " << kind << ": " << messages.size() << " events\n";
+    assert(messages.size() == 1);
+    assert(messages.back()["tagId"].text == "ti:tile:42");
+    assert(rfid.writeCalls == 0);
+    assert(!rfid.crypto);
+    for (int i = 0; i < 100; ++i) { clockMs += 10; loopRfid(); }
+    assert(messages.size() == 1); // Suppress duplicates only after success.
+    assert(rfid.badHalts == 0);
+  }
+}
+
+static void differentTagsHaveNoReadCooldown() {
+  reset();
+  std::memcpy(rfid.memory[1].data(), "ti:tile:42", 10);
+  loopRfid();
+  assert(messages.size() == 1);
+  // Swap physical tags without advancing time or waiting for LED feedback.
+  rfid.cardNumber = 2;
+  rfid.cardState = MFRC522::CardState::IDLE;
+  std::memcpy(rfid.memory[1].data(), "ti:tile:43", 10);
+  loopRfid();
+  assert(messages.size() == 2);
+  assert(messages.back()["tagId"].text == "ti:tile:43");
+}
+
+static void repeatedReadFailuresCanBeDisabled() {
+  reset(); rfid.authFailures = 3;
+  for (int i = 0; i < 3; ++i) { loopRfid(); assert(messages.empty()); }
+  rfidEnabled = false;
+  const int selects = rfid.selectCalls;
+  for (int i = 0; i < 10; ++i) loopRfid();
+  assert(rfid.selectCalls == selects);
+  rfidEnabled = true;
+  loopRfid();
+  assert(messages.size() == 1);
+  assert(messages.back()["tagId"].text.empty()); // Blank tags still reach the writer.
+}
+
+static void failedPresenceRepliesRecoverWhileHeld() {
+  for (int kind = 0; kind < 2; ++kind) {
+    reset();
+    std::memcpy(rfid.memory[1].data(), "ti:tile:42", 10);
+    if (kind == 0) rfid.requestErrors = 1;
+    else rfid.lostRequestReplies = 1;
+    for (int i = 0; i < 100 && messages.empty(); ++i) loopRfid();
+    assert(messages.size() == 1);
+    assert(messages.back()["tagId"].text == "ti:tile:42");
+    for (int i = 0; i < 100; ++i) loopRfid();
+    assert(messages.size() == 1);
+  }
+
+  reset(); rfid.present = false;
+  for (int i = 0; i < 100; ++i) loopRfid();
+  assert(messages.empty());
+  assert(rfid.writeCalls == 0);
 }
 
 int main() {
@@ -168,5 +241,9 @@ int main() {
   payloadBoundaries();
   readingStillWorks();
   timerWraparound();
+  failedReadsRecoverWhileHeld();
+  differentTagsHaveNoReadCooldown();
+  repeatedReadFailuresCanBeDisabled();
+  failedPresenceRepliesRecoverWhileHeld();
   std::cout << "RFID tests passed\n";
 }
