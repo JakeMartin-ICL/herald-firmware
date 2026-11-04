@@ -61,26 +61,24 @@ static bool rfidReadContent(String& out) {
   if (!rfidAuth()) return false;
 
   char raw[33] = {};
-  byte buf[18] = {};
+  byte buf[18];
   byte bufSize;
   MFRC522::StatusCode s;
 
   bufSize = sizeof(buf);
   s = rfid.MIFARE_Read(1, buf, &bufSize);
-  if (s != MFRC522::STATUS_OK || bufSize != sizeof(buf)) {
+  if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: read block 1 failed: ");
-    if (s == MFRC522::STATUS_OK) Serial.println("Incomplete response");
-    else Serial.println(rfid.GetStatusCodeName(s));
+    Serial.println(rfid.GetStatusCodeName(s));
     return false;
   }
   memcpy(raw, buf, 16);
 
   bufSize = sizeof(buf);
   s = rfid.MIFARE_Read(2, buf, &bufSize);
-  if (s != MFRC522::STATUS_OK || bufSize != sizeof(buf)) {
+  if (s != MFRC522::STATUS_OK) {
     Serial.print("RFID: read block 2 failed: ");
-    if (s == MFRC522::STATUS_OK) Serial.println("Incomplete response");
-    else Serial.println(rfid.GetStatusCodeName(s));
+    Serial.println(rfid.GetStatusCodeName(s));
     return false;
   }
   memcpy(raw + 16, buf, 16);
@@ -231,43 +229,14 @@ void loopRfid() {
     return;
   }
 
-  // Match IsNewCardPresent's register setup, but retain the request status:
-  // its boolean result hides errors that can leave a card in READY.
-  rfid.PCD_WriteRegister(MFRC522::TxModeReg, 0x00);
-  rfid.PCD_WriteRegister(MFRC522::RxModeReg, 0x00);
-  rfid.PCD_WriteRegister(MFRC522::ModWidthReg, 0x26);
-  byte atqa[2];
-  byte atqaSize = sizeof(atqa);
-  const MFRC522::StatusCode requestStatus = rfid.PICC_RequestA(atqa, &atqaSize);
-  const bool answered = requestStatus == MFRC522::STATUS_OK || requestStatus == MFRC522::STATUS_COLLISION;
-  if (!answered && requestStatus != MFRC522::STATUS_TIMEOUT) {
-    resetRfidReader();
-    return;
-  }
-
-  // A lost ATQA response can also leave a card READY. Try SELECT even after
-  // a timeout, but do not reset if it fails: absent and successfully halted
-  // cards normally time out, and resetting would re-arm duplicate reads.
-  if (!rfid.PICC_ReadCardSerial()) {
-    // The presence request already moved the card to READY. Leaving a failed
-    // selection there makes later "new card" probes ignore a tag still held
-    // in place. Reset the RF field so the next loop can try it again.
-    if (answered) resetRfidReader();
-    return;
-  }
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
 
   String content;
   bool ok = rfidReadContent(content);
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 
-  if (!ok) {
-    // HALT suppresses duplicates only after a successful read. On failure,
-    // power-cycle the card via the reader reset so it can retry without the
-    // user having to remove and re-present the tag.
-    resetRfidReader();
-    return;
-  }
+  if (!ok) return;
 
   // Sanitise: non-ASCII bytes in a WebSocket text frame cause the browser to close
   // the connection. Replace any such bytes so the message is always valid UTF-8.

@@ -45,25 +45,25 @@ payload boundaries, normal reading, and timer wraparound. The held-tag case
 reproduced the old zero-write timeout before this fix. These are protocol-model
 tests, not a claim of physical-reader validation.
 
-## RFID read recovery (3.5.2)
+## RFID reading rollback (3.5.3)
 
-Failed presence requests, card selection, authentication or block reads reset
-the reader and RF field so a tag held in place can be retried on the next loop.
-A lost presence response is recovered by attempting selection without resetting
-successfully halted tags. Incomplete block responses are rejected rather than
-interpreted as tag data. Previously a failed
-selection could leave the card in READY, or a failed read could leave it halted,
-so subsequent new-card probes ignored it until it was physically removed.
+Version 3.5.2 reduced read reliability on physical hardware. Version 3.5.3
+restores `src/rfid.cpp` exactly to the version shipped in 3.5.1, retaining its
+working tag-writing transactions and verification.
 
-Successful reads still halt the tag to suppress duplicates while it stays in the
-field. A different tag is accepted without a cooldown. The browser's 1.2-second
-result display does not delay the reader. Update every box being used as a
-scanning station to get the recovery fix.
+Normal reading again uses the library's new-card detection followed by selection
+only when detection succeeds. It does not select after a detection timeout or
+reset the reader after read/detection errors. Successful reads still halt the
+tag to suppress duplicates; different tags have no programmed cooldown.
 
-Protocol tests exercise each failure while the same tag remains in place, then
-check that its successful read is emitted once. They also cover consecutive
-different tags without advancing time, repeated failures, reader disable/enable,
-and the existing write and read-back verification flows.
+The original failed-read recovery limitation remains: a tag may need to be
+removed and presented again after a failed read. A replacement recovery approach
+needs hardware validation before release. The protocol model used for 3.5.2 did
+not capture the timing and RF behaviour behind the reported regression.
+
+Regression checks cover absent and held tags without extra selection/reset
+commands, consecutive different tags, and the existing writing flows. Update
+all scanning boxes running 3.5.2 to restore the previous reading implementation.
 
 All environments pin `espressif32@6.12.0` (Arduino 2.0.17), which matches the
 ESP-NOW callback API used by this firmware. Update that pin deliberately when
